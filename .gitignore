@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models & Data
+*.engine
+*.onnx
+*.pt
+*.pth
+*.weights
+models/*.trt
+data/
+recordings/
+snapshots/
+clips/
+
+# Logs
+*.log
+logs/
+
+# MinIO data
+minio_data/
+
+# PostgreSQL data
+pg_data/
+
+# Redis data
+redis_data/
+
+# Ollama data
+ollama_data/
+
+# Alembic
+*.pyc
+
+# Coverage
+.coverage
+htmlcov/
+
+# Prompt file (not part of codebase)
+Deep_Vision_by_DNS_CLAUDE_PROMPT_v2.md
