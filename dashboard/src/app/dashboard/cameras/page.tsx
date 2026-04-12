@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
-import { Camera, Plus, Wifi, WifiOff, Settings, Trash2 } from "lucide-react";
+import { Camera, Plus, Wifi, WifiOff, Settings, Trash2, RefreshCw } from "lucide-react";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function CamerasPage() {
   const [cameras, setCameras] = useState<any[]>([]);
@@ -12,8 +15,13 @@ export default function CamerasPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [gridSize, setGridSize] = useState<"2x2" | "3x3" | "4x4">("3x3");
 
+  const [snapTs, setSnapTs] = useState(Date.now());
+
   useEffect(() => {
     loadCameras();
+    // Refresh snapshots every 10 seconds
+    const iv = setInterval(() => setSnapTs(Date.now()), 10000);
+    return () => clearInterval(iv);
   }, []);
 
   async function loadCameras() {
@@ -97,8 +105,11 @@ export default function CamerasPage() {
               className="group bg-surface border border-border rounded-xl overflow-hidden hover:border-border-hover transition-all"
             >
               {/* Video Preview Area */}
-              <div className="relative aspect-video bg-background flex items-center justify-center">
-                <Camera className="w-8 h-8 text-text-muted" />
+              <div className="relative aspect-video bg-background flex items-center justify-center overflow-hidden">
+                {cam.status === "online" ? (
+                  <CameraSnapshot camId={cam.id} camName={cam.name} ts={snapTs} />
+                ) : null}
+                <Camera className={`w-8 h-8 text-text-muted ${cam.status === "online" ? "hidden" : ""}`} />
                 {/* Status Badge */}
                 <div className="absolute top-2 left-2">
                   <span
@@ -260,5 +271,49 @@ function AddCameraModal({
         </form>
       </div>
     </div>
+  );
+}
+
+function CameraSnapshot({ camId, camName, ts }: { camId: string; camName: string; ts: number }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+
+    fetch(`${API_URL}/api/cameras/${camId}/snapshot`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed");
+        return res.blob();
+      })
+      .then((blob) => {
+        if (!cancelled) {
+          setSrc(URL.createObjectURL(blob));
+          setError(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [camId, ts]);
+
+  if (error || !src) {
+    return <Camera className="w-8 h-8 text-text-muted" />;
+  }
+
+  return (
+    <img
+      src={src}
+      alt={camName}
+      className="w-full h-full object-cover"
+    />
   );
 }
