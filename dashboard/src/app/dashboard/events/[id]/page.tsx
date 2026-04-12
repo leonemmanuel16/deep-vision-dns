@@ -6,6 +6,39 @@ import { api } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 import { ArrowLeft, Image, Video, User, Car } from "lucide-react";
 
+function AuthenticatedSnapshot({
+  snapshotUrl,
+  alt,
+  className,
+}: {
+  snapshotUrl: string;
+  alt: string;
+  className?: string;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    api
+      .fetchSnapshot(snapshotUrl)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setSrc(url);
+      })
+      .catch(() => {});
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [snapshotUrl]);
+
+  if (!src) {
+    return <Image className="w-12 h-12 text-text-muted" />;
+  }
+
+  return <img src={src} alt={alt} className={className} />;
+}
+
 export default function EventDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -64,8 +97,8 @@ export default function EventDetailPage() {
         <div className="bg-surface border border-border rounded-xl overflow-hidden">
           <div className="aspect-video bg-background flex items-center justify-center">
             {event.snapshot_url ? (
-              <img
-                src={event.snapshot_url}
+              <AuthenticatedSnapshot
+                snapshotUrl={event.snapshot_url}
                 alt="Snapshot"
                 className="w-full h-full object-contain"
               />

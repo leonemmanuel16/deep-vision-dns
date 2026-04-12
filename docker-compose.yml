@@ -71,7 +71,7 @@ services:
       - ./api:/app
       - recordings:/recordings
 
-  # ── Detector (DeepStream + Motion Gate) ─────────────────────
+  # ── Detector (YOLO + OpenCV) ─────────────────────────────────
   detector:
     build:
       context: ./detector

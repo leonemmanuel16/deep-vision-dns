@@ -152,9 +152,25 @@ class ApiClient {
     return this.request<any>("/health/system");
   }
 
+  // Snapshots
+  getSnapshotUrl(path: string): string {
+    return `${this.baseUrl}/snapshots/${path}`;
+  }
+
+  async fetchSnapshot(path: string): Promise<Blob> {
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await fetch(this.getSnapshotUrl(path), { headers });
+    if (!res.ok) throw new Error(`Failed to fetch snapshot: ${res.status}`);
+    return res.blob();
+  }
+
   // Assistant
   async askAssistant(question: string) {
-    const res = await fetch("http://localhost:8001/api/ask", {
+    const res = await fetch(`${API_URL}/api/ask`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

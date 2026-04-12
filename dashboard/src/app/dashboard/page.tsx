@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [cameras, setCameras] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -38,27 +39,12 @@ export default function DashboardPage() {
         setStats(s);
         setCameras(c);
         setEvents(e);
-      } catch (err) {
-        // DEV: load demo data when backend is unavailable
-        setStats({
-          total: 347,
-          by_type: { person_detected: 189, vehicle_detected: 112, animal_detected: 46 },
-          by_label: { person: 189, car: 78, truck: 23, bus: 11, dog: 28, cat: 18 },
-          by_camera: {},
-        });
-        setCameras([
-          { id: "cam-1", name: "Entrada Principal", location: "Lobby", status: "online", brand: "Hikvision", model: "DS-2CD2143", recording_enabled: true },
-          { id: "cam-2", name: "Estacionamiento", location: "Exterior", status: "online", brand: "Dahua", model: "IPC-HFW2831", recording_enabled: true },
-          { id: "cam-3", name: "Almacen", location: "Interior", status: "offline", brand: "Hikvision", model: "DS-2CD2043", recording_enabled: false },
-          { id: "cam-4", name: "Acceso Peatonal", location: "Lateral", status: "online", brand: "Axis", model: "P3245-V", recording_enabled: true },
-        ]);
-        setEvents([
-          { id: "e1", label: "person", event_type: "person_detected", confidence: 0.94, detected_at: new Date().toISOString() },
-          { id: "e2", label: "car", event_type: "vehicle_detected", confidence: 0.87, detected_at: new Date(Date.now() - 300000).toISOString() },
-          { id: "e3", label: "person", event_type: "person_detected", confidence: 0.91, detected_at: new Date(Date.now() - 600000).toISOString() },
-          { id: "e4", label: "dog", event_type: "animal_detected", confidence: 0.82, detected_at: new Date(Date.now() - 900000).toISOString() },
-          { id: "e5", label: "truck", event_type: "vehicle_detected", confidence: 0.89, detected_at: new Date(Date.now() - 1200000).toISOString() },
-        ]);
+        setError(null);
+      } catch (err: any) {
+        console.error("Dashboard load error:", err);
+        setError(
+          err?.message || "No se pudo conectar con el servidor. Verifica que la API este en linea."
+        );
       } finally {
         setLoading(false);
       }
@@ -74,6 +60,26 @@ export default function DashboardPage() {
         <div className="animate-pulse text-text-muted">
           Cargando dashboard...
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 bg-surface border border-border rounded-xl">
+        <AlertTriangle className="w-12 h-12 text-danger mb-4" />
+        <h2 className="text-lg font-semibold text-text-primary mb-2">
+          Error al cargar el dashboard
+        </h2>
+        <p className="text-text-muted text-sm text-center max-w-md">
+          {error}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 px-4 py-2 bg-primary hover:bg-primary-hover text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          Reintentar
+        </button>
       </div>
     );
   }

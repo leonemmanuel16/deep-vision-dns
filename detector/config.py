@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     db_password: str = "changeme_secure_password"
 
     # Redis
-    redis_url: str = "redis://redis:6379"
+    redis_host: str = "redis"
+    redis_port: int = 6379
 
     # MinIO
     minio_host: str = "minio"
@@ -23,22 +24,34 @@ class Settings(BaseSettings):
     minio_bucket_clips: str = "clips"
 
     # Detection
-    detection_fps: int = 10
-    confidence_threshold: float = 0.5
-    motion_on_threshold: float = 0.005
-    motion_off_frames: int = 30
-    deepstream_model: str = "yolov8m"
+    confidence_threshold: float = 0.45
+    process_every_n_frames: int = 3
+    yolo_model: str = "yolov8n.pt"
+    yolo_imgsz: int = 640
+    tracker_type: str = "botsort.yaml"
+
+    # Deduplication
+    dedup_window_seconds: int = 30
+
+    # Camera reconnection
+    reconnect_interval: int = 30
 
     # Retention
     video_retention_hours: int = 48
 
-    # Nightly
-    nightly_start_hour: int = 0
-    nightly_end_hour: int = 5
+    # Logging
+    stats_interval_seconds: int = 60
 
     @property
     def db_url(self) -> str:
-        return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        return (
+            f"postgresql://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        )
+
+    @property
+    def redis_url(self) -> str:
+        return f"redis://{self.redis_host}:{self.redis_port}"
 
     @property
     def minio_endpoint(self) -> str:

@@ -1,10 +1,45 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 import { Bell, Filter, Search, Image, ChevronRight } from "lucide-react";
+
+function SnapshotThumbnail({ snapshotUrl }: { snapshotUrl: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    api
+      .fetchSnapshot(snapshotUrl)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setSrc(url);
+      })
+      .catch(() => {});
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [snapshotUrl]);
+
+  if (!src) {
+    return (
+      <div className="w-12 h-9 bg-background rounded flex items-center justify-center">
+        <Image className="w-4 h-4 text-text-muted" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt="snapshot"
+      className="w-12 h-9 rounded object-cover"
+    />
+  );
+}
 
 export default function EventsPage() {
   const [events, setEvents] = useState<any[]>([]);
@@ -130,9 +165,13 @@ export default function EventsPage() {
                   className="border-b border-border/50 hover:bg-surface-hover transition-colors"
                 >
                   <td className="px-4 py-3">
-                    <div className="w-12 h-9 bg-background rounded flex items-center justify-center">
-                      <Image className="w-4 h-4 text-text-muted" />
-                    </div>
+                    {event.snapshot_url ? (
+                      <SnapshotThumbnail snapshotUrl={event.snapshot_url} />
+                    ) : (
+                      <div className="w-12 h-9 bg-background rounded flex items-center justify-center">
+                        <Image className="w-4 h-4 text-text-muted" />
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span

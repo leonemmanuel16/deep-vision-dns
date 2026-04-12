@@ -16,6 +16,41 @@ import {
   Maximize2,
 } from "lucide-react";
 
+function EventThumbnail({ snapshotUrl }: { snapshotUrl: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    api
+      .fetchSnapshot(snapshotUrl)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setSrc(url);
+      })
+      .catch(() => {});
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [snapshotUrl]);
+
+  if (!src) {
+    return (
+      <div className="w-16 h-12 bg-surface-hover rounded flex items-center justify-center shrink-0">
+        <Image className="w-4 h-4 text-text-muted" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt="snapshot"
+      className="w-16 h-12 rounded object-cover shrink-0"
+    />
+  );
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function CameraDetailPage() {
@@ -221,9 +256,7 @@ export default function CameraDetailPage() {
                 className="flex items-center gap-4 p-3 bg-background rounded-lg"
               >
                 {event.snapshot_url && (
-                  <div className="w-16 h-12 bg-surface-hover rounded flex items-center justify-center shrink-0">
-                    <Image className="w-4 h-4 text-text-muted" />
-                  </div>
+                  <EventThumbnail snapshotUrl={event.snapshot_url} />
                 )}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-text-primary capitalize">
