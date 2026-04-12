@@ -12,7 +12,11 @@ import {
   Image,
   Wifi,
   WifiOff,
+  RefreshCw,
+  Maximize2,
 } from "lucide-react";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function CameraDetailPage() {
   const params = useParams();
@@ -120,17 +124,7 @@ export default function CameraDetailPage() {
 
       {/* Tab Content */}
       {activeTab === "live" && (
-        <div className="bg-surface border border-border rounded-xl overflow-hidden">
-          <div className="aspect-video bg-background flex items-center justify-center">
-            <div className="text-center">
-              <Camera className="w-16 h-16 text-text-muted mx-auto mb-3" />
-              <p className="text-text-secondary">Vista en vivo</p>
-              <p className="text-xs text-text-muted mt-1">
-                Conecta el stream RTSP para ver el video
-              </p>
-            </div>
-          </div>
-        </div>
+        <LiveView cameraId={cameraId} cameraName={camera.name} status={camera.status} />
       )}
 
       {activeTab === "config" && (
@@ -247,6 +241,130 @@ export default function CameraDetailPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function LiveView({ cameraId, cameraName, status }: { cameraId: string; cameraName: string; status: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(2); // seconds
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const fetchSnapshot = () => {
+    const token = localStorage.getItem("access_token");
+    if (!token || status !== "online") return;
+
+    fetch(`${API_URL}/api/cameras/${cameraId}/snapshot`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed");
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        setSrc((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+        setError(false);
+        setLoading(false);
+      })
+      .catch(() => {
+        setError(true);
+        setLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    fetchSnapshot();
+    const iv = setInterval(fetchSnapshot, refreshInterval * 1000);
+    return () => clearInterval(iv);
+  }, [cameraId, refreshInterval, status]);
+
+  if (status !== "online") {
+    return (
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="aspect-video bg-background flex items-center justify-center">
+          <div className="text-center">
+            <WifiOff className="w-16 h-16 text-danger mx-auto mb-3" />
+            <p className="text-text-secondary">Camara offline</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className={`bg-surface border border-border rounded-xl overflow-hidden ${isFullscreen ? "fixed inset-0 z-50 rounded-none" : ""}`}>
+        <div className={`relative ${isFullscreen ? "h-full" : "aspect-video"} bg-background flex items-center justify-center`}>
+          {loading && !src && (
+            <div className="text-center">
+              <RefreshCw className="w-8 h-8 text-primary mx-auto mb-2 animate-spin" />
+              <p className="text-text-muted text-sm">Conectando...</p>
+            </div>
+          )}
+          {src && (
+            <img
+              src={src}
+              alt={cameraName}
+              className={`${isFullscreen ? "h-full" : "w-full h-full"} object-contain`}
+            />
+          )}
+          {error && !src && (
+            <div className="text-center">
+              <Camera className="w-16 h-16 text-text-muted mx-auto mb-3" />
+              <p className="text-text-secondary">Error al conectar</p>
+              <button onClick={fetchSnapshot} className="mt-2 text-xs text-primary hover:underline">
+                Reintentar
+              </button>
+            </div>
+          )}
+          {/* Live badge */}
+          {src && (
+            <div className="absolute top-3 left-3 flex items-center gap-2">
+              <span className="flex items-center gap-1.5 bg-danger/90 text-white text-xs px-2.5 py-1 rounded-full">
+                <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                EN VIVO
+              </span>
+            </div>
+          )}
+          {/* Fullscreen toggle */}
+          <button
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="absolute top-3 right-3 p-2 bg-black/50 hover:bg-black/70 rounded-lg transition-colors"
+          >
+            <Maximize2 className="w-4 h-4 text-white" />
+          </button>
+          {/* Camera info overlay */}
+          {src && (
+            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4">
+              <p className="text-white text-sm font-medium">{cameraName}</p>
+              <p className="text-white/70 text-xs">{new Date().toLocaleString()}</p>
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Refresh interval selector */}
+      <div className="flex items-center gap-3 text-xs text-text-muted">
+        <span>Actualizar cada:</span>
+        {[1, 2, 5, 10].map((s) => (
+          <button
+            key={s}
+            onClick={() => setRefreshInterval(s)}
+            className={`px-2 py-1 rounded ${
+              refreshInterval === s
+                ? "bg-primary text-white"
+                : "bg-surface border border-border text-text-secondary hover:text-text-primary"
+            }`}
+          >
+            {s}s
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
