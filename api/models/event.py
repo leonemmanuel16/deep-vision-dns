@@ -26,6 +26,6 @@ class Event(Base):
     needs_deep_review: Mapped[bool] = mapped_column(Boolean, default=True)
     attributes: Mapped[dict] = mapped_column(JSONB, default=dict)
     person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    event_metadata: Mapped[dict] = mapped_column('metadata', JSONB, default=dict)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

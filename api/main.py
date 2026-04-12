@@ -16,6 +16,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
+    redirect_slashes=False,
     title="Deep Vision by DNS",
     description="Video analytics platform API",
     version="1.0.0",
