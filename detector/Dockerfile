@@ -23,8 +23,10 @@ RUN git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo.git /
     cd /opt/DeepStream-Yolo && \
     CUDA_VER=${CUDA_VER} make -C nvdsinfer_custom_impl_Yolo
 
-# ── Export YOLO26m to DeepStream-compatible ONNX ─────────────
+# ── Download YOLO26m and export to DeepStream-compatible ONNX ─
 RUN mkdir -p /opt/models && \
+    python3 -c "from ultralytics import YOLO; YOLO('yolo26m.pt')" && \
+    cp yolo26m.pt /opt/DeepStream-Yolo/ && \
     cd /opt/DeepStream-Yolo && \
     python3 utils/export_yolo26.py -w yolo26m.pt --dynamic && \
     mv yolo26m.onnx /opt/models/yolo26m.onnx && \
