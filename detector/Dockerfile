@@ -16,7 +16,8 @@ RUN pip3 install --no-cache-dir \
     schedule>=1.2.0 \
     onnx>=1.16.0 \
     onnxslim \
-    onnxruntime
+    onnxruntime \
+    onnxscript
 
 # ── DeepStream-Yolo: custom YOLO bbox parser ─────────────────
 RUN git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo.git /opt/DeepStream-Yolo && \
