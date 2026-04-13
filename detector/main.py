@@ -499,7 +499,7 @@ class DeepStreamDetector:
                             settings.face_analyze_every_n == 1
                         )
                     if should_analyze:
-                        face_result = self.face_analyzer.analyze(frame, bbox)
+                        face_result = self.face_analyzer.analyze(frame, bbox, camera_id=camera_id)
                         if face_result.person_id:
                             person_id = face_result.person_id
 
@@ -520,6 +520,7 @@ class DeepStreamDetector:
                         "confidence": face_result.face_confidence,
                         "person_id": face_result.person_id,
                         "person_name": face_result.person_name,
+                        "is_unknown": face_result.is_unknown,
                         "age": face_result.age,
                         "gender": face_result.gender,
                         "emotion": face_result.emotion,
@@ -708,7 +709,7 @@ class YOLOFallbackProcessor:
                             self._face_analysis_count.setdefault(face_key, 0)
                             self._face_analysis_count[face_key] += 1
                             if self._face_analysis_count[face_key] % settings.face_analyze_every_n == 1:
-                                face_result = self.face_analyzer.analyze(frame, det.bbox)
+                                face_result = self.face_analyzer.analyze(frame, det.bbox, camera_id=self.camera_id)
                                 if face_result.person_id:
                                     person_id = face_result.person_id
 
@@ -761,7 +762,7 @@ class DetectorService:
         self.db = DatabaseManager()
         self.uploader = SnapshotUploader()
         self.movement_filter = MovementFilter()
-        self.face_analyzer = FaceAnalyzer()
+        self.face_analyzer = FaceAnalyzer(snapshot_uploader=self.uploader)
         self.redis_client = None
         self._ds_detector = None
         self._fallback_processors = []

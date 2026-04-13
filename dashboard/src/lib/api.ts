@@ -240,6 +240,25 @@ class ApiClient {
     return this.request<any>("/persons/stats");
   }
 
+  async getUnknownPersons(params?: Record<string, string>) {
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    return this.request<any[]>(`/persons/unknowns${query}`);
+  }
+
+  async identifyPerson(personId: string, data: { name: string; employee_id?: string; department?: string; notes?: string }) {
+    return this.request<any>(`/persons/${personId}/identify`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async mergePersons(sourceId: string, targetPersonId: string) {
+    return this.request<any>(`/persons/${sourceId}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ target_person_id: targetPersonId }),
+    });
+  }
+
   // Assistant
   async askAssistant(question: string) {
     const res = await fetch(`${API_URL}/api/ask`, {

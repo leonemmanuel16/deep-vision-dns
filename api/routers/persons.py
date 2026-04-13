@@ -1,4 +1,4 @@
-"""Known Persons endpoints — face database management."""
+"""Known Persons endpoints — face database management with unknown auto-registration."""
 
 import io
 import uuid
@@ -9,18 +9,21 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from minio import Minio
 
 from config import settings
 from database import get_db
 from models.known_person import KnownPerson
-from schemas.known_person import PersonCreate, PersonUpdate, PersonResponse
+from models.event import Event
+from schemas.known_person import (
+    PersonCreate, PersonUpdate, PersonResponse,
+    MergeRequest, IdentifyRequest,
+)
 from services.auth import get_current_user
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
-# DeepFace lazy import
 _deepface_module = None
 
 
@@ -45,7 +48,6 @@ def _get_minio():
 
 
 def _person_to_response(person: KnownPerson) -> dict:
-    """Convert KnownPerson model to response dict with has_face_encoding."""
     return {
         "id": person.id,
         "name": person.name,
@@ -54,23 +56,34 @@ def _person_to_response(person: KnownPerson) -> dict:
         "photo_url": person.photo_url,
         "notes": person.notes,
         "is_active": person.is_active,
+        "is_unknown": person.is_unknown or False,
         "has_face_encoding": person.face_encoding is not None,
+        "first_seen_camera_id": person.first_seen_camera_id,
+        "first_seen_at": person.first_seen_at,
+        "times_seen": person.times_seen or 1,
+        "last_seen_at": person.last_seen_at,
+        "merged_into_id": person.merged_into_id,
         "created_at": person.created_at,
         "updated_at": person.updated_at,
     }
 
 
+# ═══════════════════════════════════════════════════════════════
+# LIST / SEARCH
+# ═══════════════════════════════════════════════════════════════
+
 @router.get("/", response_model=list[PersonResponse])
 def list_persons(
     search: str | None = None,
     is_active: bool | None = None,
+    is_unknown: bool | None = None,
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """List all known persons."""
-    query = db.query(KnownPerson)
+    """List persons. Filter by is_unknown=true to see only unknowns."""
+    query = db.query(KnownPerson).filter(KnownPerson.merged_into_id.is_(None))
 
     if search:
         query = query.filter(
@@ -80,6 +93,8 @@ def list_persons(
         )
     if is_active is not None:
         query = query.filter(KnownPerson.is_active == is_active)
+    if is_unknown is not None:
+        query = query.filter(KnownPerson.is_unknown == is_unknown)
 
     persons = query.order_by(desc(KnownPerson.created_at)).offset(offset).limit(limit).all()
     return [_person_to_response(p) for p in persons]
@@ -91,21 +106,62 @@ def person_stats(
     user=Depends(get_current_user),
 ):
     """Get face database statistics."""
-    from sqlalchemy import func
-
-    total = db.query(func.count(KnownPerson.id)).scalar()
-    active = db.query(func.count(KnownPerson.id)).filter(KnownPerson.is_active == True).scalar()
+    total = db.query(func.count(KnownPerson.id)).filter(
+        KnownPerson.merged_into_id.is_(None)
+    ).scalar()
+    active = db.query(func.count(KnownPerson.id)).filter(
+        KnownPerson.is_active == True,
+        KnownPerson.merged_into_id.is_(None),
+    ).scalar()
+    known = db.query(func.count(KnownPerson.id)).filter(
+        KnownPerson.is_unknown == False,
+        KnownPerson.merged_into_id.is_(None),
+    ).scalar()
+    unknowns = db.query(func.count(KnownPerson.id)).filter(
+        KnownPerson.is_unknown == True,
+        KnownPerson.merged_into_id.is_(None),
+    ).scalar()
     with_encoding = db.query(func.count(KnownPerson.id)).filter(
-        KnownPerson.face_encoding.isnot(None)
+        KnownPerson.face_encoding.isnot(None),
+        KnownPerson.merged_into_id.is_(None),
     ).scalar()
 
     return {
         "total": total,
         "active": active,
+        "known": known,
+        "unknowns": unknowns,
         "with_face_encoding": with_encoding,
         "without_face_encoding": total - with_encoding,
     }
 
+
+@router.get("/unknowns", response_model=list[PersonResponse])
+def list_unknowns(
+    limit: int = Query(default=50, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """List only unknown/unidentified persons, sorted by most recently seen."""
+    persons = (
+        db.query(KnownPerson)
+        .filter(
+            KnownPerson.is_unknown == True,
+            KnownPerson.is_active == True,
+            KnownPerson.merged_into_id.is_(None),
+        )
+        .order_by(desc(KnownPerson.last_seen_at))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_person_to_response(p) for p in persons]
+
+
+# ═══════════════════════════════════════════════════════════════
+# CRUD
+# ═══════════════════════════════════════════════════════════════
 
 @router.get("/{person_id}", response_model=PersonResponse)
 def get_person(
@@ -113,7 +169,6 @@ def get_person(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Get a single known person."""
     person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
@@ -126,13 +181,13 @@ def create_person(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Create a new known person (without photo — use /upload-photo to add face)."""
     person = KnownPerson(
         name=data.name,
         employee_id=data.employee_id,
         department=data.department,
         notes=data.notes,
         is_active=True,
+        is_unknown=False,
     )
     db.add(person)
     db.commit()
@@ -150,51 +205,35 @@ async def register_person_with_photo(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """
-    Register a new person WITH photo — extracts face embedding automatically.
-    The photo must contain exactly one visible face.
-    """
+    """Register a new known person WITH photo — extracts face embedding."""
     DeepFace = _get_deepface()
     if DeepFace is None:
-        raise HTTPException(
-            status_code=503,
-            detail="DeepFace not available on API server. Use detector service for face registration."
-        )
+        raise HTTPException(status_code=503, detail="DeepFace not available")
 
-    # Read photo
     contents = await photo.read()
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    # Extract face embedding
     try:
         representations = DeepFace.represent(
-            img,
-            model_name="ArcFace",
-            detector_backend="retinaface",
-            enforce_detection=True,
-            align=True,
+            img, model_name="ArcFace", detector_backend="retinaface",
+            enforce_detection=True, align=True,
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"No face detected in photo: {e}")
-
-    if not representations:
-        raise HTTPException(status_code=400, detail="No face detected in photo")
+        raise HTTPException(status_code=400, detail=f"No face detected: {e}")
 
     embedding = np.array(representations[0]["embedding"])
     face_confidence = representations[0].get("face_confidence", 0.0)
     encoding_bytes = pickle.dumps(embedding)
 
-    # Upload photo to MinIO
     photo_url = ""
     try:
         minio_client = _get_minio()
         bucket = "persons"
         if not minio_client.bucket_exists(bucket):
             minio_client.make_bucket(bucket)
-
         filename = f"{uuid.uuid4().hex}.jpg"
         _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
         data = io.BytesIO(buf.tobytes())
@@ -202,17 +241,12 @@ async def register_person_with_photo(
         minio_client.put_object(bucket, filename, data, length=size, content_type="image/jpeg")
         photo_url = f"{bucket}/{filename}"
     except Exception:
-        pass  # Photo upload is optional
+        pass
 
-    # Create person in DB
     person = KnownPerson(
-        name=name,
-        employee_id=employee_id,
-        department=department,
-        notes=notes,
-        face_encoding=encoding_bytes,
-        photo_url=photo_url,
-        is_active=True,
+        name=name, employee_id=employee_id, department=department,
+        notes=notes, face_encoding=encoding_bytes, photo_url=photo_url,
+        is_active=True, is_unknown=False,
     )
     db.add(person)
     db.commit()
@@ -232,10 +266,7 @@ async def upload_person_photo(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """
-    Upload/update a person's photo and extract face embedding.
-    Replaces existing encoding if present.
-    """
+    """Upload/update a person's photo and extract face embedding."""
     person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
@@ -252,11 +283,8 @@ async def upload_person_photo(
 
     try:
         representations = DeepFace.represent(
-            img,
-            model_name="ArcFace",
-            detector_backend="retinaface",
-            enforce_detection=True,
-            align=True,
+            img, model_name="ArcFace", detector_backend="retinaface",
+            enforce_detection=True, align=True,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"No face detected: {e}")
@@ -264,7 +292,6 @@ async def upload_person_photo(
     embedding = np.array(representations[0]["embedding"])
     encoding_bytes = pickle.dumps(embedding)
 
-    # Upload photo
     try:
         minio_client = _get_minio()
         bucket = "persons"
@@ -284,11 +311,7 @@ async def upload_person_photo(
     db.commit()
     db.refresh(person)
 
-    return {
-        **_person_to_response(person),
-        "message": "Face encoding updated successfully",
-        "embedding_size": len(embedding),
-    }
+    return {**_person_to_response(person), "message": "Face encoding updated"}
 
 
 @router.put("/{person_id}", response_model=PersonResponse)
@@ -298,7 +321,6 @@ def update_person(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Update a person's info (not photo)."""
     person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
@@ -319,14 +341,105 @@ def delete_person(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Delete a person from the face database."""
     person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
-
     db.delete(person)
     db.commit()
     return {"message": "Person deleted", "id": str(person_id)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# IDENTIFY & MERGE (for unknowns)
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/{person_id}/identify", response_model=PersonResponse)
+def identify_unknown(
+    person_id: uuid.UUID,
+    data: IdentifyRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Assign identity to an unknown person.
+    Changes them from "Desconocido" to a named known person.
+    Keeps the same face embedding so future detections match correctly.
+    """
+    person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found")
+    if not person.is_unknown:
+        raise HTTPException(status_code=400, detail="Person is already identified")
+
+    person.name = data.name
+    person.is_unknown = False
+    if data.employee_id:
+        person.employee_id = data.employee_id
+    if data.department:
+        person.department = data.department
+    if data.notes:
+        person.notes = data.notes
+    person.updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(person)
+    return _person_to_response(person)
+
+
+@router.post("/{person_id}/merge", response_model=PersonResponse)
+def merge_into_existing(
+    person_id: uuid.UUID,
+    data: MergeRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Merge an unknown person into an existing known person.
+
+    - Updates all events that reference the unknown person_id → target_person_id
+    - Marks the unknown as merged (merged_into_id) and inactive
+    - The target person keeps their existing face encoding
+    - Future detections will match the target person directly
+    """
+    # Validate source (unknown)
+    source = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source person not found")
+
+    # Validate target (existing)
+    target = db.query(KnownPerson).filter(KnownPerson.id == data.target_person_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target person not found")
+
+    if str(source.id) == str(target.id):
+        raise HTTPException(status_code=400, detail="Cannot merge person into themselves")
+
+    # Update all events: source → target
+    updated_events = (
+        db.query(Event)
+        .filter(Event.person_id == person_id)
+        .update({Event.person_id: data.target_person_id})
+    )
+
+    # Mark source as merged + inactive
+    source.merged_into_id = data.target_person_id
+    source.is_active = False
+    source.is_unknown = False
+    source.notes = (
+        f"Fusionado con {target.name} (ID: {str(target.id)[:8]}). "
+        f"{updated_events} eventos transferidos."
+    )
+    source.updated_at = datetime.now(timezone.utc)
+
+    # Update target's times_seen
+    if source.times_seen and target.times_seen:
+        target.times_seen = (target.times_seen or 0) + (source.times_seen or 0)
+    target.updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(target)
+
+    return _person_to_response(target)
 
 
 @router.get("/{person_id}/events")
@@ -337,8 +450,6 @@ def get_person_events(
     user=Depends(get_current_user),
 ):
     """Get recent events where this person was detected."""
-    from models.event import Event
-
     events = (
         db.query(Event)
         .filter(Event.person_id == person_id)

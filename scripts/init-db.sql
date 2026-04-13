@@ -101,9 +101,18 @@ CREATE TABLE known_persons (
     photo_url VARCHAR(500),
     notes TEXT,
     is_active BOOLEAN DEFAULT true,
+    is_unknown BOOLEAN DEFAULT false, -- auto-registered unknown face
+    first_seen_camera_id UUID, -- camera where first detected
+    first_seen_at TIMESTAMPTZ, -- when first detected
+    times_seen INTEGER DEFAULT 1, -- how many times detected
+    last_seen_at TIMESTAMPTZ, -- last detection time
+    merged_into_id UUID, -- if merged into another person
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX idx_known_persons_unknown ON known_persons(is_unknown) WHERE is_unknown = true;
+CREATE INDEX idx_known_persons_active ON known_persons(is_active) WHERE is_active = true;
 
 -- ── Alert Rules ──────────────────────────────────────────────
 CREATE TABLE alert_rules (
