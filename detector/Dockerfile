@@ -10,7 +10,9 @@ RUN pip3 install --no-cache-dir \
     https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_x86_64.whl
 
 # ── Python dependencies ──────────────────────────────────────
-RUN pip3 install --no-cache-dir \
+# Force-remove distutils-installed blinker that blocks pip upgrades
+RUN pip3 install --no-cache-dir --ignore-installed blinker && \
+    pip3 install --no-cache-dir \
     ultralytics>=8.3.0 \
     psycopg2-binary>=2.9.0 \
     redis>=5.0 \
