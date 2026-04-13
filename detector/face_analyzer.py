@@ -15,6 +15,7 @@ Uses RetinaFace for detection (best accuracy) and ArcFace for recognition
 
 import io
 import logging
+import os
 import threading
 import time
 import pickle
@@ -28,6 +29,35 @@ import numpy as np
 import psycopg2
 import psycopg2.extras
 
+# ── Force TensorFlow to CPU-only BEFORE it ever loads ──────────
+# This MUST happen before `import tensorflow` anywhere in the process.
+# Prevents TF from initializing CUDA (which conflicts with PyTorch/YOLO).
+os.environ["CUDA_VISIBLE_DEVICES_TF"] = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
+try:
+    # Save original CUDA_VISIBLE_DEVICES before hiding GPU from TF
+    _orig_cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    import tensorflow as tf  # noqa: E402 — imports CPU-only TF
+    # Restore CUDA_VISIBLE_DEVICES so PyTorch can use GPU
+    if _orig_cuda_visible is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = _orig_cuda_visible
+    else:
+        del os.environ["CUDA_VISIBLE_DEVICES"]
+    _tf_available = True
+except ImportError:
+    _tf_available = False
+except Exception:
+    _tf_available = False
+    # Restore env var on failure too
+    if "_orig_cuda_visible" in dir():
+        if _orig_cuda_visible is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = _orig_cuda_visible
+        elif "CUDA_VISIBLE_DEVICES" in os.environ:
+            del os.environ["CUDA_VISIBLE_DEVICES"]
+
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,31 +68,18 @@ _deepface_lock = threading.Lock()
 
 
 def _get_deepface():
-    """Lazy-load DeepFace to avoid slow startup.
-    Forces TensorFlow to CPU to preserve GPU memory for YOLO."""
+    """Lazy-load DeepFace. TensorFlow already configured for CPU at module load."""
     global _deepface
     if _deepface is None:
         with _deepface_lock:
             if _deepface is None:
+                if not _tf_available:
+                    logger.error("TensorFlow not available — face recognition disabled")
+                    return None
                 try:
-                    import os
-                    # Suppress TF verbose logs
-                    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-
-                    # Force TensorFlow to CPU — GPU memory reserved for YOLO
-                    import tensorflow as tf
-                    try:
-                        tf.config.set_visible_devices([], 'GPU')
-                        logger.info("TensorFlow forced to CPU mode (GPU reserved for YOLO)")
-                    except RuntimeError:
-                        # GPU devices already initialized — limit memory instead
-                        for gpu in tf.config.list_physical_devices('GPU'):
-                            tf.config.experimental.set_memory_growth(gpu, True)
-                        logger.info("TensorFlow GPU memory growth enabled")
-
                     from deepface import DeepFace
                     _deepface = DeepFace
-                    logger.info("DeepFace loaded successfully (CPU mode)")
+                    logger.info("DeepFace loaded successfully (TF CPU-only mode)")
                 except ImportError:
                     logger.error("DeepFace not installed — face recognition disabled")
                 except Exception as e:
@@ -139,13 +156,17 @@ class FaceAnalyzer:
         )
 
     def _warmup(self):
-        """Pre-load DeepFace models in background thread."""
+        """Pre-load DeepFace models in background thread.
+        Waits 20s for YOLO/PyTorch to initialize CUDA first."""
         try:
+            # Wait for YOLO to fully initialize GPU before loading DeepFace
+            time.sleep(20)
+
             DeepFace = _get_deepface()
             if DeepFace is None:
                 return
 
-            logger.info("Warming up DeepFace models...")
+            logger.info("Warming up DeepFace models (CPU)...")
             dummy = np.zeros((160, 160, 3), dtype=np.uint8)
             dummy[40:120, 40:120] = 200
 
