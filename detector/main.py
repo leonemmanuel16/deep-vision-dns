@@ -647,7 +647,7 @@ class DetectorService:
         logger.info("=" * 60)
         logger.info("Deep Vision by DNS — Detector Service")
         logger.info(f"DeepStream available: {DEEPSTREAM_AVAILABLE}")
-        logger.info(f"Model: {settings.yolo_model}")
+        logger.info(f"Model: {settings.yolo_model} (YOLO26 NMS-free)")
         logger.info(f"Confidence threshold: {settings.confidence_threshold}")
         logger.info(f"Dedup window: {settings.dedup_window_seconds}s")
         logger.info("=" * 60)

@@ -23,14 +23,14 @@ class Settings(BaseSettings):
     minio_bucket_snapshots: str = "snapshots"
     minio_bucket_clips: str = "clips"
 
-    # DeepStream + YOLO
-    yolo_model: str = "yolov8m"
+    # DeepStream + YOLO26
+    yolo_model: str = "yolo26m"
     yolo_imgsz: int = 640
     confidence_threshold: float = 0.45
     tracker_type: str = "botsort.yaml"
 
     # DeepStream model paths
-    onnx_model_path: str = "/opt/models/yolov8m.onnx"
+    onnx_model_path: str = "/opt/models/yolo26m.onnx"
     labels_path: str = "/opt/models/labels.txt"
     pgie_config_path: str = "/app/configs/pgie_yolo_config.txt"
     tracker_config_path: str = "/app/configs/tracker_config.yml"

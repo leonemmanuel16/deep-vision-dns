@@ -1,7 +1,8 @@
 """
-YOLO Detector — GPU-accelerated object detection using Ultralytics YOLOv8.
+YOLO Detector — GPU-accelerated object detection using Ultralytics YOLO26.
 
-Loads YOLOv8n (nano) for fast inference on NVIDIA GPUs.
+Loads YOLO26m (medium) for fast inference on NVIDIA GPUs.
+YOLO26 is NMS-free (end-to-end), faster and more efficient.
 Uses BoT-SORT tracker for multi-object tracking across frames.
 """
 
