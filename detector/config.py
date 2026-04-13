@@ -23,12 +23,26 @@ class Settings(BaseSettings):
     minio_bucket_snapshots: str = "snapshots"
     minio_bucket_clips: str = "clips"
 
-    # Detection
-    confidence_threshold: float = 0.45
-    process_every_n_frames: int = 3
-    yolo_model: str = "yolov8n.pt"
+    # DeepStream + YOLO
+    yolo_model: str = "yolov8m"
     yolo_imgsz: int = 640
+    confidence_threshold: float = 0.45
     tracker_type: str = "botsort.yaml"
+
+    # DeepStream model paths
+    onnx_model_path: str = "/opt/models/yolov8m.onnx"
+    labels_path: str = "/opt/models/labels.txt"
+    pgie_config_path: str = "/app/configs/pgie_yolo_config.txt"
+    tracker_config_path: str = "/app/configs/tracker_config.yml"
+    custom_parser_path: str = "/opt/DeepStream-Yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so"
+
+    # Motion gate
+    motion_on_threshold: float = 0.005
+    motion_off_frames: int = 30
+    detection_fps: int = 10
+
+    # Processing
+    process_every_n_frames: int = 3
 
     # Deduplication
     dedup_window_seconds: int = 30

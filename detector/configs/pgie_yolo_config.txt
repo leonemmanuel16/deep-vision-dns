@@ -1,0 +1,32 @@
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+model-color-format=0
+
+# YOLOv8m ONNX model (exported via DeepStream-Yolo)
+onnx-file=/opt/models/yolov8m.onnx
+model-engine-file=/opt/models/yolov8m.onnx_b2_gpu0_fp16.engine
+labelfile-path=/opt/models/labels.txt
+
+# Inference settings
+batch-size=2
+network-mode=2
+num-detected-classes=80
+interval=0
+gie-unique-id=1
+process-mode=1
+network-type=0
+cluster-mode=2
+maintain-aspect-ratio=1
+symmetric-padding=1
+workspace-size=2048
+
+# Custom YOLO parser from DeepStream-Yolo
+parse-bbox-func-name=NvDsInferParseYolo
+custom-lib-path=/opt/DeepStream-Yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
+engine-create-func-name=NvDsInferYoloCudaEngineGet
+
+[class-attrs-all]
+pre-cluster-threshold=0.45
+topk=200
+nms-iou-threshold=0.45

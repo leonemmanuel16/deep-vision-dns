@@ -1,27 +1,33 @@
-FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04
+FROM nvcr.io/nvidia/deepstream:7.1-triton-multiarch
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_VER=12
 ENV PYTHONUNBUFFERED=1
-ENV LANG=C.UTF-8
 
-# Install system deps: Python 3.11, ffmpeg, opencv runtime libs
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-dev python3-pip \
-    ffmpeg libsm6 libxext6 libglib2.0-0 libgl1-mesa-glx \
-    curl \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && python3 -m pip install --upgrade pip setuptools wheel \
-    && rm -rf /var/lib/apt/lists/*
+# ── Python dependencies ──────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+    ultralytics>=8.3.0 \
+    psycopg2-binary>=2.9.0 \
+    redis>=5.0 \
+    minio>=7.0 \
+    pydantic-settings>=2.0 \
+    Pillow>=10.0 \
+    numpy>=1.26.0 \
+    schedule>=1.2.0
+
+# ── DeepStream-Yolo: custom YOLO bbox parser ─────────────────
+RUN git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo.git /opt/DeepStream-Yolo && \
+    cd /opt/DeepStream-Yolo && \
+    CUDA_VER=${CUDA_VER} make -C nvdsinfer_custom_impl_Yolo
+
+# ── Export YOLOv8m to DeepStream-compatible ONNX ─────────────
+RUN mkdir -p /opt/models && \
+    cd /opt/DeepStream-Yolo && \
+    python3 utils/export_yoloV8.py -w yolov8m.pt --dynamic && \
+    mv yolov8m.onnx /opt/models/yolov8m.onnx && \
+    cp labels.txt /opt/models/labels.txt
 
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
 CMD ["python3", "main.py"]

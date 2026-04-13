@@ -71,7 +71,7 @@ services:
       - ./api:/app
       - recordings:/recordings
 
-  # ── Detector (YOLO + OpenCV) ─────────────────────────────────
+  # ── Detector (DeepStream 7.1 + YOLOv8m) ─────────────────────
   detector:
     build:
       context: ./detector

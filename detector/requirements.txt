@@ -1,7 +1,5 @@
---extra-index-url https://download.pytorch.org/whl/cu124
-
-torch>=2.5.0
-torchvision>=0.20.0
+# Dependencies installed in DeepStream container via Dockerfile
+# This file is kept for reference and fallback mode
 ultralytics>=8.3.0
 opencv-python-headless>=4.9.0
 numpy>=1.26.0

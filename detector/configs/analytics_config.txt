@@ -1,0 +1,19 @@
+[property]
+enable=1
+config-width=1920
+config-height=1080
+
+# ROI zones can be added per camera source
+# Example:
+# [roi-filtering-stream-0]
+# enable=1
+# inverse-roi=0
+# roi-RF=295;643;579;634;642;913;303;916
+
+# Line crossing example:
+# [line-crossing-stream-0]
+# enable=1
+# extended=0
+# mode=balanced
+# class-id=-1
+# line-crossing-Entry=789;672;1084;900
