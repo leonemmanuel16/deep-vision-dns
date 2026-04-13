@@ -38,17 +38,35 @@ _deepface_lock = threading.Lock()
 
 
 def _get_deepface():
-    """Lazy-load DeepFace to avoid slow startup."""
+    """Lazy-load DeepFace to avoid slow startup.
+    Forces TensorFlow to CPU to preserve GPU memory for YOLO."""
     global _deepface
     if _deepface is None:
         with _deepface_lock:
             if _deepface is None:
                 try:
+                    import os
+                    # Suppress TF verbose logs
+                    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+                    # Force TensorFlow to CPU — GPU memory reserved for YOLO
+                    import tensorflow as tf
+                    try:
+                        tf.config.set_visible_devices([], 'GPU')
+                        logger.info("TensorFlow forced to CPU mode (GPU reserved for YOLO)")
+                    except RuntimeError:
+                        # GPU devices already initialized — limit memory instead
+                        for gpu in tf.config.list_physical_devices('GPU'):
+                            tf.config.experimental.set_memory_growth(gpu, True)
+                        logger.info("TensorFlow GPU memory growth enabled")
+
                     from deepface import DeepFace
                     _deepface = DeepFace
-                    logger.info("DeepFace loaded successfully")
+                    logger.info("DeepFace loaded successfully (CPU mode)")
                 except ImportError:
                     logger.error("DeepFace not installed — face recognition disabled")
+                except Exception as e:
+                    logger.error(f"DeepFace init error: {e}")
     return _deepface
 
 
