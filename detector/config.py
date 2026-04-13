@@ -54,8 +54,9 @@ class Settings(BaseSettings):
     # How long (seconds) to keep position history per tracker
     movement_history_ttl: float = 30.0
 
-    # Face Recognition (DeepFace)
+    # Face Recognition (via face-analyzer microservice)
     face_recognition_enabled: bool = True
+    face_analyzer_url: str = "http://face-analyzer:8002"
     face_detector_backend: str = "retinaface"
     face_recognition_model: str = "ArcFace"
     face_match_threshold: float = 0.40  # cosine distance (lower = stricter)

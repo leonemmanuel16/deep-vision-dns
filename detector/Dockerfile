@@ -11,6 +11,7 @@ RUN pip3 install --no-cache-dir \
 
 # ── Python dependencies ──────────────────────────────────────
 # Force-remove distutils-installed blinker that blocks pip upgrades
+# Note: DeepFace/TensorFlow moved to face-analyzer microservice (avoids CUDA conflict)
 RUN pip3 install --no-cache-dir --ignore-installed blinker && \
     pip3 install --no-cache-dir \
     ultralytics>=8.3.0 \
@@ -25,8 +26,7 @@ RUN pip3 install --no-cache-dir --ignore-installed blinker && \
     onnxslim \
     onnxruntime \
     onnxscript \
-    deepface>=0.0.93 \
-    tf-keras
+    requests>=2.31.0
 
 # ── DeepStream-Yolo: custom YOLO bbox parser ─────────────────
 RUN git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo.git /opt/DeepStream-Yolo && \

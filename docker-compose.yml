@@ -110,6 +110,24 @@ services:
     depends_on:
       - api
 
+  # ── Face Analyzer (DeepFace / TensorFlow CPU) ───────────────
+  face-analyzer:
+    build:
+      context: ./face-analyzer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - CUDA_VISIBLE_DEVICES=
+      - TF_CPP_MIN_LOG_LEVEL=3
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   # ── Ollama (LLM local) ─────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
