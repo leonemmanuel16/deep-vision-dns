@@ -281,7 +281,10 @@ class DeepStreamDetector:
             "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so",
         )
         tracker.set_property("ll-config-file", settings.tracker_config_path)
-        tracker.set_property("enable-batch-process", True)
+        try:
+            tracker.set_property("enable-batch-process", True)
+        except TypeError:
+            pass  # Property not available in this DS version
         self.pipeline.add(tracker)
 
         # ── nvvideoconvert (for frame extraction in probe) ──
