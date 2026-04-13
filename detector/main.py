@@ -237,8 +237,57 @@ class SnapshotUploader:
 # DEEPSTREAM PIPELINE MODE
 # ═══════════════════════════════════════════════════════════════
 
+class SnapshotGrabber:
+    """Lightweight RTSP frame grabber for snapshot capture.
+    Maintains one OpenCV capture per camera, grabs frames on demand."""
+
+    def __init__(self, cameras: dict):
+        self._cameras = cameras
+        self._captures: dict[str, cv2.VideoCapture] = {}
+        self._lock = threading.Lock()
+        self._last_frames: dict[str, tuple[np.ndarray, float]] = {}
+
+    def grab_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """Grab a frame from the camera's RTSP stream. Thread-safe."""
+        # Return cached frame if less than 2 seconds old
+        with self._lock:
+            cached = self._last_frames.get(camera_id)
+            if cached and (time.time() - cached[1]) < 2.0:
+                return cached[0]
+
+        cam_data = self._cameras.get(camera_id)
+        if not cam_data:
+            return None
+
+        rtsp_url = cam_data.get("rtsp_sub_url") or cam_data["rtsp_url"]
+
+        with self._lock:
+            cap = self._captures.get(camera_id)
+            if cap is None or not cap.isOpened():
+                cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if not cap.isOpened():
+                    return None
+                self._captures[camera_id] = cap
+
+            ret, frame = cap.read()
+            if not ret:
+                cap.release()
+                self._captures.pop(camera_id, None)
+                return None
+
+            self._last_frames[camera_id] = (frame, time.time())
+            return frame
+
+    def stop(self):
+        with self._lock:
+            for cap in self._captures.values():
+                cap.release()
+            self._captures.clear()
+
+
 class DeepStreamDetector:
-    """Full DeepStream pipeline: decode (GPU) -> nvinfer (YOLOv8m TRT) -> nvtracker."""
+    """Full DeepStream pipeline: decode (GPU) -> nvinfer (YOLO26m TRT) -> nvtracker."""
 
     def __init__(self, cameras: dict, db: DatabaseManager,
                  redis_client: redis.Redis, uploader: SnapshotUploader,
@@ -251,6 +300,7 @@ class DeepStreamDetector:
         self.uploader = uploader
         self.movement_filter = movement_filter or MovementFilter()
         self.face_analyzer = face_analyzer or FaceAnalyzer()
+        self.snapshot_grabber = SnapshotGrabber(cameras)
 
         self.pipeline = None
         self.loop = None
@@ -312,15 +362,6 @@ class DeepStreamDetector:
             pass  # Property not available in this DS version
         self.pipeline.add(tracker)
 
-        # ── nvvideoconvert (for frame extraction in probe) ──
-        nvvidconv = Gst.ElementFactory.make("nvvideoconvert", "convertor")
-        self.pipeline.add(nvvidconv)
-
-        capsfilter = Gst.ElementFactory.make("capsfilter", "capsfilter")
-        caps = Gst.Caps.from_string("video/x-raw(memory:NVMM), format=RGBA")
-        capsfilter.set_property("caps", caps)
-        self.pipeline.add(capsfilter)
-
         # ── fakesink ──
         sink = Gst.ElementFactory.make("fakesink", "fakesink")
         sink.set_property("sync", 0)
@@ -330,13 +371,11 @@ class DeepStreamDetector:
         # ── Link ──
         streammux.link(pgie)
         pgie.link(tracker)
-        tracker.link(nvvidconv)
-        nvvidconv.link(capsfilter)
-        capsfilter.link(sink)
+        tracker.link(sink)
 
-        # ── Attach probe after capsfilter ──
-        sink_pad = capsfilter.get_static_pad("src")
-        sink_pad.add_probe(Gst.PadProbeType.BUFFER, self._buffer_probe, 0)
+        # ── Attach probe on tracker src pad (metadata only, no frame extraction) ──
+        tracker_src_pad = tracker.get_static_pad("src")
+        tracker_src_pad.add_probe(Gst.PadProbeType.BUFFER, self._buffer_probe, 0)
 
         # ── Bus ──
         bus = self.pipeline.get_bus()
@@ -420,17 +459,10 @@ class DeepStreamDetector:
                 camera_name = self.cameras.get(camera_id, {}).get("name", f"Cam-{source_id}")
                 self._stats["frames"] += 1
 
-                # Extract frame only when there are detections
+                # Frame extraction disabled — probe attached to tracker pad
+                # (no nvvideoconvert/RGBA conversion). Snapshots captured via
+                # OpenCV RTSP grab in a separate thread when events fire.
                 frame = None
-                has_objects = frame_meta.obj_meta_list is not None
-                if has_objects:
-                    try:
-                        n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                        frame = np.array(n_frame, copy=True, order="C")
-                        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-                    except Exception as e:
-                        logger.debug(f"Frame extraction failed: {e}")
-                        frame = None
 
                 l_obj = frame_meta.obj_meta_list
                 now = time.time()
@@ -491,8 +523,10 @@ class DeepStreamDetector:
                             continue
                         self._recent_trackers[dedup_key] = now
 
-                    # Upload snapshot
+                    # Upload snapshot (grab via RTSP)
                     snapshot_url = ""
+                    if frame is None:
+                        frame = self.snapshot_grabber.grab_frame(camera_id)
                     if frame is not None:
                         snapshot_url = self.uploader.upload(frame, camera_id, label)
 
@@ -613,6 +647,7 @@ class DeepStreamDetector:
             self.pipeline.set_state(Gst.State.NULL)
         if self.loop:
             self.loop.quit()
+        self.snapshot_grabber.stop()
         logger.info("DeepStream pipeline stopped")
 
     def get_stats(self) -> dict:
