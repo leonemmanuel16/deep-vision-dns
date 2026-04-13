@@ -5,9 +5,9 @@ ENV CUDA_VER=12
 ENV PYTHONUNBUFFERED=1
 
 # ── Install pyds (DeepStream Python bindings) ────────────────
+# Note: import test skipped because libcuda.so.1 is only available at runtime
 RUN pip3 install --no-cache-dir \
-    https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_x86_64.whl && \
-    python3 -c "import pyds; print('pyds OK')"
+    https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_x86_64.whl
 
 # ── Python dependencies ──────────────────────────────────────
 RUN pip3 install --no-cache-dir \
