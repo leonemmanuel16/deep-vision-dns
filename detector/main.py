@@ -40,6 +40,15 @@ logging.basicConfig(
 logger = logging.getLogger("detector")
 
 # ── Check if DeepStream is available ─────────────────────────
+import sys
+# Add DeepStream lib paths for pyds
+for _ds_path in [
+    "/opt/nvidia/deepstream/deepstream/lib",
+    "/opt/nvidia/deepstream/deepstream-7.1/lib",
+]:
+    if _ds_path not in sys.path:
+        sys.path.insert(0, _ds_path)
+
 try:
     import gi
     gi.require_version("Gst", "1.0")

@@ -4,6 +4,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_VER=12
 ENV PYTHONUNBUFFERED=1
 
+# ── Install pyds (DeepStream Python bindings) ────────────────
+RUN DS_VERSION="7.1" && \
+    DS_PATH="/opt/nvidia/deepstream/deepstream" && \
+    if [ -f "$DS_PATH/lib/pyds.so" ]; then \
+        cp "$DS_PATH/lib/pyds.so" /usr/lib/python3/dist-packages/; \
+    fi && \
+    for whl in "$DS_PATH"/lib/pyds-*.whl; do \
+        [ -f "$whl" ] && pip3 install "$whl" && break; \
+    done; \
+    python3 -c "import pyds; print('pyds OK')" || echo "pyds will use sys.path fallback"
+
 # ── Python dependencies ──────────────────────────────────────
 RUN pip3 install --no-cache-dir \
     ultralytics>=8.3.0 \
