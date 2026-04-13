@@ -168,6 +168,78 @@ class ApiClient {
     return res.blob();
   }
 
+  // Persons (Face Database)
+  async getPersons(params?: Record<string, string>) {
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+    return this.request<any[]>(`/persons/${query}`);
+  }
+
+  async getPerson(id: string) {
+    return this.request<any>(`/persons/${id}`);
+  }
+
+  async createPerson(data: { name: string; employee_id?: string; department?: string; notes?: string }) {
+    return this.request<any>("/persons/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async registerPersonWithPhoto(formData: FormData) {
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await fetch(`${this.baseUrl}/persons/register`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "Registration failed" }));
+      throw new Error(error.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async uploadPersonPhoto(personId: string, formData: FormData) {
+    const token = this.getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await fetch(`${this.baseUrl}/persons/${personId}/upload-photo`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "Upload failed" }));
+      throw new Error(error.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async updatePerson(id: string, data: any) {
+    return this.request<any>(`/persons/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deletePerson(id: string) {
+    return this.request(`/persons/${id}`, { method: "DELETE" });
+  }
+
+  async getPersonEvents(personId: string) {
+    return this.request<any[]>(`/persons/${personId}/events`);
+  }
+
+  async getPersonStats() {
+    return this.request<any>("/persons/stats");
+  }
+
   // Assistant
   async askAssistant(question: string) {
     const res = await fetch(`${API_URL}/api/ask`, {

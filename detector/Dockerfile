@@ -22,7 +22,9 @@ RUN pip3 install --no-cache-dir \
     onnx>=1.16.0 \
     onnxslim \
     onnxruntime \
-    onnxscript
+    onnxscript \
+    deepface>=0.0.93 \
+    tf-keras
 
 # ── DeepStream-Yolo: custom YOLO bbox parser ─────────────────
 RUN git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo.git /opt/DeepStream-Yolo && \

@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # How long (seconds) to keep position history per tracker
     movement_history_ttl: float = 30.0
 
+    # Face Recognition (DeepFace)
+    face_recognition_enabled: bool = True
+    face_detector_backend: str = "retinaface"
+    face_recognition_model: str = "ArcFace"
+    face_match_threshold: float = 0.40  # cosine distance (lower = stricter)
+    face_min_size: int = 40  # minimum crop size in pixels
+    face_analyze_attributes: bool = True  # age, gender, emotion
+    face_analyze_every_n: int = 5  # analyze face every N detections per tracker
+
     # Processing
     process_every_n_frames: int = 3
 

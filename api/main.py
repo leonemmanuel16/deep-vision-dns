@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import auth, cameras, events, zones, recordings, health, alerts, snapshots
+from routers import auth, cameras, events, zones, recordings, health, alerts, snapshots, persons
 
 
 @asynccontextmanager
@@ -41,6 +41,7 @@ app.include_router(recordings.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
 app.include_router(snapshots.router, prefix="/api")
+app.include_router(persons.router, prefix="/api")
 
 
 @app.get("/")

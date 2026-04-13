@@ -13,3 +13,7 @@ minio>=7.2.0
 httpx>=0.26.0
 psutil>=5.9.0
 bcrypt==4.0.1
+opencv-python-headless>=4.8.0
+numpy>=1.26.0
+deepface>=0.0.93
+tf-keras

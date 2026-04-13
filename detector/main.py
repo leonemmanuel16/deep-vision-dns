@@ -31,6 +31,7 @@ from minio.error import S3Error
 
 from config import settings
 from movement_filter import MovementFilter
+from face_analyzer import FaceAnalyzer, FaceResult
 
 # ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -149,19 +150,37 @@ class DatabaseManager:
             self._local.conn = None
 
     def insert_event(self, camera_id, event_type, label, confidence, bbox,
-                     tracker_id, snapshot_url, detected_at) -> Optional[str]:
+                     tracker_id, snapshot_url, detected_at,
+                     person_id=None, face_data=None) -> Optional[str]:
         conn = self._get_conn()
         try:
+            # Build attributes from face data
+            attributes = {}
+            if face_data and face_data.face_detected:
+                attributes["face_detected"] = True
+                attributes["face_confidence"] = face_data.face_confidence
+                if face_data.person_name:
+                    attributes["face_match"] = face_data.person_name
+                    attributes["match_distance"] = face_data.match_distance
+                if face_data.age:
+                    attributes["edad_estimada"] = face_data.age
+                if face_data.gender:
+                    attributes["genero_estimado"] = face_data.gender
+                if face_data.emotion:
+                    attributes["emocion"] = face_data.emotion
+
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO events (
                         camera_id, event_type, label, confidence,
                         bbox, tracker_id, snapshot_url,
-                        review_pass, needs_deep_review, detected_at
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,'online',true,%s)
+                        review_pass, needs_deep_review, detected_at,
+                        person_id, attributes
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,'online',true,%s,%s,%s)
                     RETURNING id""",
                     (camera_id, event_type, label, confidence,
-                     json.dumps(bbox), tracker_id, snapshot_url, detected_at),
+                     json.dumps(bbox), tracker_id, snapshot_url, detected_at,
+                     person_id, json.dumps(attributes) if attributes else '{}'),
                 )
                 result = cur.fetchone()
                 return str(result[0]) if result else None
@@ -223,20 +242,23 @@ class DeepStreamDetector:
 
     def __init__(self, cameras: dict, db: DatabaseManager,
                  redis_client: redis.Redis, uploader: SnapshotUploader,
-                 movement_filter: MovementFilter = None):
+                 movement_filter: MovementFilter = None,
+                 face_analyzer: FaceAnalyzer = None):
         self.cameras = cameras
         self.cam_id_list = list(cameras.keys())
         self.db = db
         self.redis_client = redis_client
         self.uploader = uploader
         self.movement_filter = movement_filter or MovementFilter()
+        self.face_analyzer = face_analyzer or FaceAnalyzer()
 
         self.pipeline = None
         self.loop = None
         self._thread = None
 
-        # Dedup + stats
+        # Dedup + stats + face tracking
         self._recent_trackers: dict[str, float] = {}
+        self._face_analysis_count: dict[str, int] = {}  # tracker_key -> count
         self._lock = threading.Lock()
         self._stats = {"detections": 0, "events": 0, "frames": 0, "filtered_stationary": 0}
 
@@ -464,8 +486,25 @@ class DeepStreamDetector:
                 if frame is not None:
                     snapshot_url = self.uploader.upload(frame, camera_id, label)
 
+                # Face analysis for person detections
+                face_result = FaceResult()
+                person_id = None
+                if label == "person" and frame is not None and self.face_analyzer.enabled:
+                    face_key = f"fa:{camera_id}:{tracker_id}"
+                    with self._lock:
+                        self._face_analysis_count.setdefault(face_key, 0)
+                        self._face_analysis_count[face_key] += 1
+                        should_analyze = (
+                            self._face_analysis_count[face_key] %
+                            settings.face_analyze_every_n == 1
+                        )
+                    if should_analyze:
+                        face_result = self.face_analyzer.analyze(frame, bbox)
+                        if face_result.person_id:
+                            person_id = face_result.person_id
+
                 # Publish to Redis
-                payload = json.dumps({
+                payload_data = {
                     "camera_id": camera_id,
                     "camera_name": camera_name,
                     "label": label,
@@ -474,10 +513,20 @@ class DeepStreamDetector:
                     "bbox": bbox,
                     "tracker_id": int(tracker_id),
                     "timestamp": now,
-                })
+                }
+                if face_result.face_detected:
+                    payload_data["face"] = {
+                        "detected": True,
+                        "confidence": face_result.face_confidence,
+                        "person_id": face_result.person_id,
+                        "person_name": face_result.person_name,
+                        "age": face_result.age,
+                        "gender": face_result.gender,
+                        "emotion": face_result.emotion,
+                    }
                 try:
-                    self.redis_client.publish(f"detections:{camera_id}", payload)
-                    self.redis_client.publish("detections:all", payload)
+                    self.redis_client.publish(f"detections:{camera_id}", json.dumps(payload_data))
+                    self.redis_client.publish("detections:all", json.dumps(payload_data))
                 except Exception:
                     pass
 
@@ -492,13 +541,21 @@ class DeepStreamDetector:
                     tracker_id=int(tracker_id),
                     snapshot_url=snapshot_url,
                     detected_at=detected_at,
+                    person_id=person_id,
+                    face_data=face_result if face_result.face_detected else None,
                 )
 
                 if event_id:
                     self._stats["events"] += 1
+                    face_info = ""
+                    if face_result.face_detected:
+                        if face_result.person_name:
+                            face_info = f" face={face_result.person_name}"
+                        else:
+                            face_info = " face=unknown"
                     logger.info(
                         f"[{camera_name}] {event_type} label={label} "
-                        f"conf={confidence:.2f} tracker={tracker_id} id={event_id}"
+                        f"conf={confidence:.2f} tracker={tracker_id}{face_info} id={event_id}"
                     )
 
                 try:
@@ -556,7 +613,9 @@ class YOLOFallbackProcessor:
     """OpenCV RTSP + Ultralytics YOLO fallback for non-DeepStream environments."""
 
     def __init__(self, camera_id, camera_name, rtsp_url,
-                 db, redis_client, uploader, movement_filter: MovementFilter = None):
+                 db, redis_client, uploader,
+                 movement_filter: MovementFilter = None,
+                 face_analyzer: FaceAnalyzer = None):
         self.camera_id = camera_id
         self.camera_name = camera_name
         self.rtsp_url = rtsp_url
@@ -564,9 +623,11 @@ class YOLOFallbackProcessor:
         self.redis_client = redis_client
         self.uploader = uploader
         self.movement_filter = movement_filter or MovementFilter()
+        self.face_analyzer = face_analyzer or FaceAnalyzer()
         self._stop = threading.Event()
         self._thread = None
         self._recent_trackers: dict[str, float] = {}
+        self._face_analysis_count: dict[str, int] = {}
         self._stats = {"frames": 0, "detections": 0, "events": 0, "filtered_stationary": 0}
 
     def start(self):
@@ -638,18 +699,36 @@ class YOLOFallbackProcessor:
                         self._recent_trackers[dedup_key] = now
 
                         snapshot_url = self.uploader.upload(frame, self.camera_id, det.label)
+
+                        # Face analysis for person detections
+                        face_result = FaceResult()
+                        person_id = None
+                        if det.label == "person" and self.face_analyzer.enabled:
+                            face_key = f"fa:{self.camera_id}:{tid}"
+                            self._face_analysis_count.setdefault(face_key, 0)
+                            self._face_analysis_count[face_key] += 1
+                            if self._face_analysis_count[face_key] % settings.face_analyze_every_n == 1:
+                                face_result = self.face_analyzer.analyze(frame, det.bbox)
+                                if face_result.person_id:
+                                    person_id = face_result.person_id
+
                         event_id = self.db.insert_event(
                             camera_id=self.camera_id, event_type=det.event_type,
                             label=det.label, confidence=det.confidence,
                             bbox=det.bbox, tracker_id=det.tracker_id,
                             snapshot_url=snapshot_url,
                             detected_at=datetime.now(timezone.utc),
+                            person_id=person_id,
+                            face_data=face_result if face_result.face_detected else None,
                         )
                         if event_id:
                             self._stats["events"] += 1
+                            face_info = ""
+                            if face_result.face_detected:
+                                face_info = f" face={'matched:' + face_result.person_name if face_result.person_name else 'unknown'}"
                             logger.info(
                                 f"[{self.camera_name}] {det.event_type} "
-                                f"label={det.label} conf={det.confidence:.2f}"
+                                f"label={det.label} conf={det.confidence:.2f}{face_info}"
                             )
 
                     if self._stats["frames"] % 300 == 0:
@@ -682,6 +761,7 @@ class DetectorService:
         self.db = DatabaseManager()
         self.uploader = SnapshotUploader()
         self.movement_filter = MovementFilter()
+        self.face_analyzer = FaceAnalyzer()
         self.redis_client = None
         self._ds_detector = None
         self._fallback_processors = []
@@ -697,6 +777,10 @@ class DetectorService:
         if settings.movement_filter_enabled:
             logger.info(f"  Min displacement: {settings.movement_min_displacement}px")
             logger.info(f"  Required for: {settings.movement_required_labels}")
+        logger.info(f"Face recognition: {'ON' if settings.face_recognition_enabled else 'OFF'}")
+        if settings.face_recognition_enabled:
+            logger.info(f"  Model: {settings.face_recognition_model} + {settings.face_detector_backend}")
+            logger.info(f"  Match threshold: {settings.face_match_threshold}")
         logger.info("=" * 60)
 
         # Redis
@@ -743,6 +827,7 @@ class DetectorService:
             redis_client=self.redis_client,
             uploader=self.uploader,
             movement_filter=self.movement_filter,
+            face_analyzer=self.face_analyzer,
         )
         success = self._ds_detector.build_and_start()
         if not success:
@@ -761,6 +846,7 @@ class DetectorService:
                 redis_client=self.redis_client,
                 uploader=self.uploader,
                 movement_filter=self.movement_filter,
+                face_analyzer=self.face_analyzer,
             )
             self._fallback_processors.append(proc)
             proc.start()
@@ -804,6 +890,16 @@ class DetectorService:
                 f"Stats [MovementFilter] tracked={mf_stats['tracked_objects']} "
                 f"moving={mf_stats['moving']} stationary={mf_stats['stationary']}"
             )
+
+            if self.face_analyzer.enabled:
+                face_stats = self.face_analyzer.get_stats()
+                logger.info(
+                    f"Stats [FaceAnalyzer] analyzed={face_stats['faces_analyzed']} "
+                    f"detected={face_stats['faces_detected']} "
+                    f"matched={face_stats['faces_matched']} "
+                    f"unknown={face_stats['faces_unknown']} "
+                    f"known_persons={face_stats['known_persons']}"
+                )
 
     def stop(self):
         logger.info("Detector shutting down...")
