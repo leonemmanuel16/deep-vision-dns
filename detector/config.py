@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     motion_off_frames: int = 30
     detection_fps: int = 10
 
+    # Movement filter — only alert on moving objects
+    movement_filter_enabled: bool = True
+    # Minimum pixel displacement (bbox center) to consider an object "moving"
+    movement_min_displacement: float = 30.0
+    # Number of frames to track before deciding if object is stationary
+    movement_history_frames: int = 10
+    # Labels that require movement to trigger an alert (parked cars won't alert)
+    movement_required_labels: str = "car,truck,bus,motorcycle,bicycle"
+    # How long (seconds) to keep position history per tracker
+    movement_history_ttl: float = 30.0
+
     # Processing
     process_every_n_frames: int = 3
 

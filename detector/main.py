@@ -30,6 +30,7 @@ from minio import Minio
 from minio.error import S3Error
 
 from config import settings
+from movement_filter import MovementFilter
 
 # ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -221,12 +222,14 @@ class DeepStreamDetector:
     """Full DeepStream pipeline: decode (GPU) -> nvinfer (YOLOv8m TRT) -> nvtracker."""
 
     def __init__(self, cameras: dict, db: DatabaseManager,
-                 redis_client: redis.Redis, uploader: SnapshotUploader):
+                 redis_client: redis.Redis, uploader: SnapshotUploader,
+                 movement_filter: MovementFilter = None):
         self.cameras = cameras
         self.cam_id_list = list(cameras.keys())
         self.db = db
         self.redis_client = redis_client
         self.uploader = uploader
+        self.movement_filter = movement_filter or MovementFilter()
 
         self.pipeline = None
         self.loop = None
@@ -235,7 +238,7 @@ class DeepStreamDetector:
         # Dedup + stats
         self._recent_trackers: dict[str, float] = {}
         self._lock = threading.Lock()
-        self._stats = {"detections": 0, "events": 0, "frames": 0}
+        self._stats = {"detections": 0, "events": 0, "frames": 0, "filtered_stationary": 0}
 
     def build_and_start(self):
         """Build GStreamer pipeline and start it."""
@@ -430,6 +433,20 @@ class DeepStreamDetector:
 
                 self._stats["detections"] += 1
 
+                # Movement filter: track position and check if moving
+                self.movement_filter.update_position(
+                    camera_id, int(tracker_id), bbox, label
+                )
+                if not self.movement_filter.should_alert(
+                    camera_id, int(tracker_id), label
+                ):
+                    self._stats["filtered_stationary"] += 1
+                    try:
+                        l_obj = l_obj.next
+                    except StopIteration:
+                        break
+                    continue
+
                 # Dedup by tracker_id
                 dedup_key = f"t:{camera_id}:{tracker_id}"
                 with self._lock:
@@ -539,17 +556,18 @@ class YOLOFallbackProcessor:
     """OpenCV RTSP + Ultralytics YOLO fallback for non-DeepStream environments."""
 
     def __init__(self, camera_id, camera_name, rtsp_url,
-                 db, redis_client, uploader):
+                 db, redis_client, uploader, movement_filter: MovementFilter = None):
         self.camera_id = camera_id
         self.camera_name = camera_name
         self.rtsp_url = rtsp_url
         self.db = db
         self.redis_client = redis_client
         self.uploader = uploader
+        self.movement_filter = movement_filter or MovementFilter()
         self._stop = threading.Event()
         self._thread = None
         self._recent_trackers: dict[str, float] = {}
-        self._stats = {"frames": 0, "detections": 0, "events": 0}
+        self._stats = {"frames": 0, "detections": 0, "events": 0, "filtered_stationary": 0}
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True,
@@ -598,6 +616,18 @@ class YOLOFallbackProcessor:
                     now = time.time()
                     for det in detections:
                         self._stats["detections"] += 1
+
+                        # Movement filter: track position and check if moving
+                        tid = det.tracker_id or 0
+                        self.movement_filter.update_position(
+                            self.camera_id, tid, det.bbox, det.label
+                        )
+                        if not self.movement_filter.should_alert(
+                            self.camera_id, tid, det.label
+                        ):
+                            self._stats["filtered_stationary"] += 1
+                            continue
+
                         dedup_key = (
                             f"t:{det.tracker_id}" if det.tracker_id
                             else f"g:{det.label}:{int((det.bbox['x1']+det.bbox['x2'])/400)}"
@@ -651,6 +681,7 @@ class DetectorService:
         self._running = False
         self.db = DatabaseManager()
         self.uploader = SnapshotUploader()
+        self.movement_filter = MovementFilter()
         self.redis_client = None
         self._ds_detector = None
         self._fallback_processors = []
@@ -662,6 +693,10 @@ class DetectorService:
         logger.info(f"Model: {settings.yolo_model} (YOLO26 NMS-free)")
         logger.info(f"Confidence threshold: {settings.confidence_threshold}")
         logger.info(f"Dedup window: {settings.dedup_window_seconds}s")
+        logger.info(f"Movement filter: {'ON' if settings.movement_filter_enabled else 'OFF'}")
+        if settings.movement_filter_enabled:
+            logger.info(f"  Min displacement: {settings.movement_min_displacement}px")
+            logger.info(f"  Required for: {settings.movement_required_labels}")
         logger.info("=" * 60)
 
         # Redis
@@ -707,6 +742,7 @@ class DetectorService:
             db=self.db,
             redis_client=self.redis_client,
             uploader=self.uploader,
+            movement_filter=self.movement_filter,
         )
         success = self._ds_detector.build_and_start()
         if not success:
@@ -724,6 +760,7 @@ class DetectorService:
                 db=self.db,
                 redis_client=self.redis_client,
                 uploader=self.uploader,
+                movement_filter=self.movement_filter,
             )
             self._fallback_processors.append(proc)
             proc.start()
@@ -736,25 +773,37 @@ class DetectorService:
             if not self._running:
                 break
 
+            # Movement filter stats
+            mf_stats = self.movement_filter.get_stats()
+
             if self._ds_detector:
                 stats = self._ds_detector.get_stats()
                 logger.info(
                     f"Stats [DeepStream] frames={stats['frames']} "
-                    f"detections={stats['detections']} events={stats['events']}"
+                    f"detections={stats['detections']} events={stats['events']} "
+                    f"filtered_stationary={stats.get('filtered_stationary', 0)}"
                 )
             else:
                 total_det = sum(p._stats["detections"] for p in self._fallback_processors)
                 total_evt = sum(p._stats["events"] for p in self._fallback_processors)
+                total_filtered = sum(p._stats.get("filtered_stationary", 0) for p in self._fallback_processors)
                 for p in self._fallback_processors:
                     s = p._stats
                     logger.info(
                         f"Stats [{p.camera_name}] frames={s['frames']} "
-                        f"det={s['detections']} events={s['events']}"
+                        f"det={s['detections']} events={s['events']} "
+                        f"filtered={s.get('filtered_stationary', 0)}"
                     )
                 logger.info(
                     f"Stats [TOTAL] cameras={len(self._fallback_processors)} "
-                    f"detections={total_det} events={total_evt}"
+                    f"detections={total_det} events={total_evt} "
+                    f"filtered_stationary={total_filtered}"
                 )
+
+            logger.info(
+                f"Stats [MovementFilter] tracked={mf_stats['tracked_objects']} "
+                f"moving={mf_stats['moving']} stationary={mf_stats['stationary']}"
+            )
 
     def stop(self):
         logger.info("Detector shutting down...")
