@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     minio_bucket_clips: str = "clips"
 
     # DeepStream + YOLO26
+    force_yolo_fallback: bool = False  # Set FORCE_YOLO_FALLBACK=true to skip DeepStream
+    deepstream_startup_timeout: int = 30  # seconds to wait before declaring DS dead
     yolo_model: str = "yolo26m"
     yolo_imgsz: int = 640
     confidence_threshold: float = 0.45

@@ -396,32 +396,57 @@ class DeepStreamDetector:
         return True
 
     def _create_source_bin(self, index: int, rtsp_url: str):
-        """Create a source bin for RTSP decoding on GPU."""
+        """Create a source bin for RTSP decoding on GPU.
+
+        Pattern: uridecodebin -> nvvideoconvert -> capsfilter(NV12) -> ghost_pad
+        The nvvideoconvert inside the source bin ensures frames are in NV12
+        format before reaching nvstreammux (prevents segfaults).
+        """
         bin_name = f"source-bin-{index:02d}"
         nbin = Gst.Bin.new(bin_name)
 
         uri_decode = Gst.ElementFactory.make("uridecodebin", f"uri-decode-{index}")
         uri_decode.set_property("uri", rtsp_url)
-        uri_decode.connect("pad-added", self._decodebin_pad_added, nbin)
-        uri_decode.connect("child-added", self._decodebin_child_added, index)
+
+        # nvvideoconvert: converts decoded frames to NV12 for nvstreammux
+        nvvidconv = Gst.ElementFactory.make("nvvideoconvert", f"src-nvvidconv-{index}")
+
+        # Capsfilter: force NV12 memory:NVMM output
+        caps_filter = Gst.ElementFactory.make("capsfilter", f"src-capsfilter-{index}")
+        caps_filter.set_property(
+            "caps",
+            Gst.Caps.from_string("video/x-raw(memory:NVMM), format=NV12")
+        )
 
         nbin.add(uri_decode)
+        nbin.add(nvvidconv)
+        nbin.add(caps_filter)
 
-        ghost_pad = Gst.GhostPad.new_no_target("src", Gst.PadDirection.SRC)
+        # Link: nvvideoconvert -> capsfilter
+        nvvidconv.link(caps_filter)
+
+        # Ghost pad from capsfilter output
+        cf_srcpad = caps_filter.get_static_pad("src")
+        ghost_pad = Gst.GhostPad.new("src", cf_srcpad)
         nbin.add_pad(ghost_pad)
+
+        # Connect uridecodebin pad-added to nvvideoconvert sink
+        uri_decode.connect("pad-added", self._decodebin_pad_added, nvvidconv)
+        uri_decode.connect("child-added", self._decodebin_child_added, index)
 
         return nbin
 
     @staticmethod
-    def _decodebin_pad_added(dbin, pad, nbin):
+    def _decodebin_pad_added(dbin, pad, nvvidconv):
+        """Link uridecodebin's dynamic video pad to nvvideoconvert."""
         caps = pad.get_current_caps()
         if not caps:
             return
         struct = caps.get_structure(0)
         if struct.get_name().startswith("video"):
-            ghost_pad = nbin.get_static_pad("src")
-            if ghost_pad and not ghost_pad.is_linked():
-                ghost_pad.set_target(pad)
+            sinkpad = nvvidconv.get_static_pad("sink")
+            if sinkpad and not sinkpad.is_linked():
+                pad.link(sinkpad)
 
     @staticmethod
     def _decodebin_child_added(child_proxy, obj, name, index):
@@ -436,9 +461,11 @@ class DeepStreamDetector:
                 return Gst.PadProbeReturn.OK
 
             batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
-            if batch_meta is None:
+            if not batch_meta:
                 return Gst.PadProbeReturn.OK
             l_frame = batch_meta.frame_meta_list
+            if not l_frame:
+                return Gst.PadProbeReturn.OK
         except Exception as e:
             logger.error(f"Probe init error: {e}")
             return Gst.PadProbeReturn.OK
@@ -802,6 +829,9 @@ class YOLOFallbackProcessor:
 # MAIN SERVICE
 # ═══════════════════════════════════════════════════════════════
 
+DS_CRASH_FILE = "/tmp/deepstream_crash_count"
+
+
 class DetectorService:
     """Orchestrates DeepStream or YOLO fallback detector."""
 
@@ -814,6 +844,33 @@ class DetectorService:
         self.redis_client = None
         self._ds_detector = None
         self._fallback_processors = []
+        self._cameras = {}
+
+    @staticmethod
+    def _get_ds_crash_count() -> int:
+        """Read DeepStream crash counter from temp file."""
+        try:
+            with open(DS_CRASH_FILE, "r") as f:
+                return int(f.read().strip())
+        except (FileNotFoundError, ValueError):
+            return 0
+
+    @staticmethod
+    def _increment_ds_crash_count():
+        """Increment crash counter before attempting DeepStream."""
+        count = DetectorService._get_ds_crash_count() + 1
+        with open(DS_CRASH_FILE, "w") as f:
+            f.write(str(count))
+        return count
+
+    @staticmethod
+    def _reset_ds_crash_count():
+        """Reset crash counter (called when DS runs successfully)."""
+        try:
+            import os
+            os.remove(DS_CRASH_FILE)
+        except FileNotFoundError:
+            pass
 
     def start(self):
         logger.info("=" * 60)
@@ -860,16 +917,36 @@ class DetectorService:
 
         self._running = True
 
-        if DEEPSTREAM_AVAILABLE:
+        self._cameras = cameras
+
+        # Decide whether to use DeepStream or YOLO fallback
+        ds_crash_count = self._get_ds_crash_count()
+        use_deepstream = DEEPSTREAM_AVAILABLE and not settings.force_yolo_fallback
+
+        if use_deepstream and ds_crash_count >= 3:
+            logger.warning(
+                f"DeepStream has crashed {ds_crash_count} times consecutively. "
+                "Auto-switching to YOLO fallback mode. "
+                "Delete /tmp/deepstream_crash_count to retry DeepStream."
+            )
+            use_deepstream = False
+
+        if use_deepstream:
+            # Increment crash counter BEFORE starting DS.
+            # If DS segfaults, on next restart the counter will be > 0.
+            # If DS succeeds (watchdog passes), we reset it.
+            self._increment_ds_crash_count()
             self._start_deepstream(cameras)
         else:
+            if settings.force_yolo_fallback:
+                logger.info("FORCE_YOLO_FALLBACK=true — skipping DeepStream")
             self._start_yolo_fallback(cameras)
 
         # Stats loop (main thread)
         self._stats_loop()
 
     def _start_deepstream(self, cameras: dict):
-        """Start DeepStream GPU pipeline."""
+        """Start DeepStream GPU pipeline with watchdog fallback."""
         self._ds_detector = DeepStreamDetector(
             cameras=cameras,
             db=self.db,
@@ -881,7 +958,51 @@ class DetectorService:
         success = self._ds_detector.build_and_start()
         if not success:
             logger.error("DeepStream failed to start — falling back to YOLO")
+            self._ds_detector = None
             self._start_yolo_fallback(cameras)
+            return
+
+        # Watchdog: check if pipeline survives startup
+        timeout = settings.deepstream_startup_timeout
+        logger.info(f"DeepStream watchdog: waiting {timeout}s to verify stability...")
+        watchdog_thread = threading.Thread(
+            target=self._deepstream_watchdog,
+            args=(cameras, timeout),
+            daemon=True,
+        )
+        watchdog_thread.start()
+
+    def _deepstream_watchdog(self, cameras: dict, timeout: int):
+        """Monitor DeepStream pipeline health. If it dies, fall back to YOLO."""
+        time.sleep(timeout)
+        if not self._running or not self._ds_detector:
+            return
+        # Check if the GLib main loop is still alive
+        if self._ds_detector.loop and not self._ds_detector.loop.is_running():
+            logger.error(
+                "DeepStream pipeline died within watchdog window! "
+                "Falling back to YOLO mode automatically."
+            )
+            try:
+                self._ds_detector.stop()
+            except Exception:
+                pass
+            self._ds_detector = None
+            self._start_yolo_fallback(cameras)
+        else:
+            stats = self._ds_detector.get_stats()
+            if stats["frames"] == 0:
+                logger.warning(
+                    "DeepStream running but 0 frames processed after "
+                    f"{timeout}s — pipeline may be stuck"
+                )
+            else:
+                logger.info(
+                    f"DeepStream watchdog OK — {stats['frames']} frames "
+                    f"processed in {timeout}s"
+                )
+                # Pipeline is stable — reset crash counter
+                DetectorService._reset_ds_crash_count()
 
     def _start_yolo_fallback(self, cameras: dict):
         """Start YOLO + OpenCV threads (one per camera)."""
