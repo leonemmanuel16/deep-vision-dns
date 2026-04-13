@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     minio_bucket_snapshots: str = "snapshots"
     minio_bucket_clips: str = "clips"
 
+    # Face Analyzer microservice
+    face_analyzer_url: str = "http://face-analyzer:8002"
+
     # Alerts
     webhook_url: str = ""
     whatsapp_webhook_url: str = ""

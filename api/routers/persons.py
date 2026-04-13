@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import cv2
 import numpy as np
+import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
@@ -24,18 +25,8 @@ from services.auth import get_current_user
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
-_deepface_module = None
-
-
-def _get_deepface():
-    global _deepface_module
-    if _deepface_module is None:
-        try:
-            from deepface import DeepFace
-            _deepface_module = DeepFace
-        except ImportError:
-            pass
-    return _deepface_module
+# Face-analyzer microservice URL
+FACE_ANALYZER_URL = getattr(settings, 'face_analyzer_url', 'http://face-analyzer:8002')
 
 
 def _get_minio():
@@ -205,58 +196,43 @@ async def register_person_with_photo(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Register a new known person WITH photo — extracts face embedding."""
-    DeepFace = _get_deepface()
-    if DeepFace is None:
-        raise HTTPException(status_code=503, detail="DeepFace not available")
-
+    """Register a new known person WITH photo — sends to face-analyzer microservice."""
     contents = await photo.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(status_code=400, detail="Invalid image file")
 
+    # Send to face-analyzer microservice for registration
     try:
-        representations = DeepFace.represent(
-            img, model_name="ArcFace", detector_backend="retinaface",
-            enforce_detection=True, align=True,
+        resp = http_requests.post(
+            f"{FACE_ANALYZER_URL}/register",
+            files={"image": ("photo.jpg", io.BytesIO(contents), "image/jpeg")},
+            data={"name": name, "employee_id": employee_id or "", "department": department or ""},
+            timeout=30,
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"No face detected: {e}")
+        if resp.status_code != 200:
+            error = resp.json().get("detail", "Face analysis failed")
+            raise HTTPException(status_code=resp.status_code, detail=error)
 
-    embedding = np.array(representations[0]["embedding"])
-    face_confidence = representations[0].get("face_confidence", 0.0)
-    encoding_bytes = pickle.dumps(embedding)
+        result = resp.json()
+        person_id = result.get("person_id")
 
-    photo_url = ""
-    try:
-        minio_client = _get_minio()
-        bucket = "persons"
-        if not minio_client.bucket_exists(bucket):
-            minio_client.make_bucket(bucket)
-        filename = f"{uuid.uuid4().hex}.jpg"
-        _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        data = io.BytesIO(buf.tobytes())
-        size = data.getbuffer().nbytes
-        minio_client.put_object(bucket, filename, data, length=size, content_type="image/jpeg")
-        photo_url = f"{bucket}/{filename}"
-    except Exception:
-        pass
+        # Fetch the created person from DB
+        person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
+        if person:
+            if notes:
+                person.notes = notes
+                db.commit()
+                db.refresh(person)
+            return {
+                **_person_to_response(person),
+                "face_confidence": result.get("face_confidence", 0.0),
+                "embedding_size": result.get("embedding_size", 0),
+            }
+        else:
+            return result
 
-    person = KnownPerson(
-        name=name, employee_id=employee_id, department=department,
-        notes=notes, face_encoding=encoding_bytes, photo_url=photo_url,
-        is_active=True, is_unknown=False,
-    )
-    db.add(person)
-    db.commit()
-    db.refresh(person)
-
-    return {
-        **_person_to_response(person),
-        "face_confidence": round(float(face_confidence), 3),
-        "embedding_size": len(embedding),
-    }
+    except http_requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Face analyzer service unavailable")
+    except http_requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="Face analyzer service timeout")
 
 
 @router.post("/{person_id}/upload-photo")
@@ -266,52 +242,50 @@ async def upload_person_photo(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Upload/update a person's photo and extract face embedding."""
+    """Upload/update a person's photo — sends to face-analyzer for embedding extraction."""
     person = db.query(KnownPerson).filter(KnownPerson.id == person_id).first()
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    DeepFace = _get_deepface()
-    if DeepFace is None:
-        raise HTTPException(status_code=503, detail="DeepFace not available")
-
     contents = await photo.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(status_code=400, detail="Invalid image file")
 
+    # Use face-analyzer service to extract embedding
     try:
-        representations = DeepFace.represent(
-            img, model_name="ArcFace", detector_backend="retinaface",
-            enforce_detection=True, align=True,
+        resp = http_requests.post(
+            f"{FACE_ANALYZER_URL}/analyze",
+            files={"image": ("photo.jpg", io.BytesIO(contents), "image/jpeg")},
+            data={"bbox_x1": "0", "bbox_y1": "0", "bbox_x2": "0", "bbox_y2": "0"},
+            timeout=30,
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"No face detected: {e}")
+    except (http_requests.exceptions.ConnectionError, http_requests.exceptions.Timeout):
+        raise HTTPException(status_code=503, detail="Face analyzer service unavailable")
 
-    embedding = np.array(representations[0]["embedding"])
-    encoding_bytes = pickle.dumps(embedding)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Face analysis failed")
 
+    # Upload photo to MinIO
     try:
         minio_client = _get_minio()
         bucket = "persons"
         if not minio_client.bucket_exists(bucket):
             minio_client.make_bucket(bucket)
         filename = f"{uuid.uuid4().hex}.jpg"
-        _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        data = io.BytesIO(buf.tobytes())
-        size = data.getbuffer().nbytes
-        minio_client.put_object(bucket, filename, data, length=size, content_type="image/jpeg")
-        person.photo_url = f"{bucket}/{filename}"
+        nparr = np.frombuffer(contents, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is not None:
+            _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            data = io.BytesIO(buf.tobytes())
+            size = data.getbuffer().nbytes
+            minio_client.put_object(bucket, filename, data, length=size, content_type="image/jpeg")
+            person.photo_url = f"{bucket}/{filename}"
     except Exception:
         pass
 
-    person.face_encoding = encoding_bytes
     person.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(person)
 
-    return {**_person_to_response(person), "message": "Face encoding updated"}
+    return {**_person_to_response(person), "message": "Photo updated"}
 
 
 @router.put("/{person_id}", response_model=PersonResponse)
