@@ -36,6 +36,7 @@ RUN mkdir -p /opt/models && \
     cd /opt/DeepStream-Yolo && \
     python3 utils/export_yolo26.py -w yolo26m.pt --dynamic && \
     mv yolo26m.onnx /opt/models/yolo26m.onnx && \
+    if [ -f yolo26m.onnx.data ]; then mv yolo26m.onnx.data /opt/models/yolo26m.onnx.data; fi && \
     cp labels.txt /opt/models/labels.txt
 
 WORKDIR /app
