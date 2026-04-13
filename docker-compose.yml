@@ -71,7 +71,7 @@ services:
       - ./api:/app
       - recordings:/recordings
 
-  # ── Detector (DeepStream 7.1 + YOLOv8m) ─────────────────────
+  # ── Detector (DeepStream 7.1 + YOLO26m) ─────────────────────
   detector:
     build:
       context: ./detector
@@ -88,6 +88,7 @@ services:
     volumes:
       - ./detector:/app
       - recordings:/recordings
+      - tensorrt_engines:/opt/models
     deploy:
       resources:
         reservations:
@@ -145,3 +146,4 @@ volumes:
   minio_data:
   ollama_data:
   recordings:
+  tensorrt_engines:
