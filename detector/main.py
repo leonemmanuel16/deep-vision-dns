@@ -391,182 +391,195 @@ class DeepStreamDetector:
 
     def _buffer_probe(self, pad, info, u_data):
         """Main probe: extract detections + frames, save events."""
-        gst_buffer = info.get_buffer()
-        if not gst_buffer:
-            return Gst.PadProbeReturn.OK
+        try:
+            gst_buffer = info.get_buffer()
+            if not gst_buffer:
+                return Gst.PadProbeReturn.OK
 
-        batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
-        l_frame = batch_meta.frame_meta_list
+            batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+            if batch_meta is None:
+                return Gst.PadProbeReturn.OK
+            l_frame = batch_meta.frame_meta_list
+        except Exception as e:
+            logger.error(f"Probe init error: {e}")
+            return Gst.PadProbeReturn.OK
 
         while l_frame is not None:
             try:
-                frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
-            except StopIteration:
-                break
-
-            source_id = frame_meta.source_id
-            camera_id = (
-                self.cam_id_list[source_id]
-                if source_id < len(self.cam_id_list)
-                else f"unknown-{source_id}"
-            )
-            camera_name = self.cameras.get(camera_id, {}).get("name", f"Cam-{source_id}")
-            self._stats["frames"] += 1
-
-            # Extract frame for snapshots (RGBA -> BGR)
-            frame = None
-            try:
-                n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                frame = np.array(n_frame, copy=True, order="C")
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            except Exception:
-                pass
-
-            l_obj = frame_meta.obj_meta_list
-            now = time.time()
-
-            while l_obj is not None:
                 try:
-                    obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
+                    frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
                 except StopIteration:
                     break
 
-                class_id = obj_meta.class_id
-                label = YOLO_LABELS[class_id] if class_id < len(YOLO_LABELS) else f"class_{class_id}"
-                confidence = obj_meta.confidence
-                tracker_id = obj_meta.object_id
-
-                event_type = classify_event_type(label)
-                if event_type is None:
-                    try:
-                        l_obj = l_obj.next
-                    except StopIteration:
-                        break
-                    continue
-
-                # Bounding box
-                rect = obj_meta.rect_params
-                bbox = {
-                    "x1": round(rect.left, 1),
-                    "y1": round(rect.top, 1),
-                    "x2": round(rect.left + rect.width, 1),
-                    "y2": round(rect.top + rect.height, 1),
-                }
-
-                self._stats["detections"] += 1
-
-                # Movement filter: track position and check if moving
-                self.movement_filter.update_position(
-                    camera_id, int(tracker_id), bbox, label
+                source_id = frame_meta.source_id
+                camera_id = (
+                    self.cam_id_list[source_id]
+                    if source_id < len(self.cam_id_list)
+                    else f"unknown-{source_id}"
                 )
-                if not self.movement_filter.should_alert(
-                    camera_id, int(tracker_id), label
-                ):
-                    self._stats["filtered_stationary"] += 1
+                camera_name = self.cameras.get(camera_id, {}).get("name", f"Cam-{source_id}")
+                self._stats["frames"] += 1
+
+                # Extract frame only when there are detections
+                frame = None
+                has_objects = frame_meta.obj_meta_list is not None
+                if has_objects:
                     try:
-                        l_obj = l_obj.next
+                        n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
+                        frame = np.array(n_frame, copy=True, order="C")
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+                    except Exception as e:
+                        logger.debug(f"Frame extraction failed: {e}")
+                        frame = None
+
+                l_obj = frame_meta.obj_meta_list
+                now = time.time()
+
+                while l_obj is not None:
+                    try:
+                        obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
                     except StopIteration:
                         break
-                    continue
 
-                # Dedup by tracker_id
-                dedup_key = f"t:{camera_id}:{tracker_id}"
-                with self._lock:
-                    last_seen = self._recent_trackers.get(dedup_key)
-                    if last_seen and (now - last_seen) < settings.dedup_window_seconds:
+                    class_id = obj_meta.class_id
+                    label = YOLO_LABELS[class_id] if class_id < len(YOLO_LABELS) else f"class_{class_id}"
+                    confidence = obj_meta.confidence
+                    tracker_id = obj_meta.object_id
+
+                    event_type = classify_event_type(label)
+                    if event_type is None:
                         try:
                             l_obj = l_obj.next
                         except StopIteration:
                             break
                         continue
-                    self._recent_trackers[dedup_key] = now
 
-                # Upload snapshot
-                snapshot_url = ""
-                if frame is not None:
-                    snapshot_url = self.uploader.upload(frame, camera_id, label)
-
-                # Face analysis for person detections
-                face_result = FaceResult()
-                person_id = None
-                if label == "person" and frame is not None and self.face_analyzer.enabled:
-                    face_key = f"fa:{camera_id}:{tracker_id}"
-                    with self._lock:
-                        self._face_analysis_count.setdefault(face_key, 0)
-                        self._face_analysis_count[face_key] += 1
-                        should_analyze = (
-                            self._face_analysis_count[face_key] %
-                            settings.face_analyze_every_n == 1
-                        )
-                    if should_analyze:
-                        face_result = self.face_analyzer.analyze(frame, bbox, camera_id=camera_id)
-                        if face_result.person_id:
-                            person_id = face_result.person_id
-
-                # Publish to Redis
-                payload_data = {
-                    "camera_id": camera_id,
-                    "camera_name": camera_name,
-                    "label": label,
-                    "event_type": event_type,
-                    "confidence": round(confidence, 3),
-                    "bbox": bbox,
-                    "tracker_id": int(tracker_id),
-                    "timestamp": now,
-                }
-                if face_result.face_detected:
-                    payload_data["face"] = {
-                        "detected": True,
-                        "confidence": face_result.face_confidence,
-                        "person_id": face_result.person_id,
-                        "person_name": face_result.person_name,
-                        "is_unknown": face_result.is_unknown,
-                        "age": face_result.age,
-                        "gender": face_result.gender,
-                        "emotion": face_result.emotion,
+                    # Bounding box
+                    rect = obj_meta.rect_params
+                    bbox = {
+                        "x1": round(rect.left, 1),
+                        "y1": round(rect.top, 1),
+                        "x2": round(rect.left + rect.width, 1),
+                        "y2": round(rect.top + rect.height, 1),
                     }
-                try:
-                    self.redis_client.publish(f"detections:{camera_id}", json.dumps(payload_data))
-                    self.redis_client.publish("detections:all", json.dumps(payload_data))
-                except Exception:
-                    pass
 
-                # Save event to DB
-                detected_at = datetime.now(timezone.utc)
-                event_id = self.db.insert_event(
-                    camera_id=camera_id,
-                    event_type=event_type,
-                    label=label,
-                    confidence=confidence,
-                    bbox=bbox,
-                    tracker_id=int(tracker_id),
-                    snapshot_url=snapshot_url,
-                    detected_at=detected_at,
-                    person_id=person_id,
-                    face_data=face_result if face_result.face_detected else None,
-                )
+                    self._stats["detections"] += 1
 
-                if event_id:
-                    self._stats["events"] += 1
-                    face_info = ""
+                    # Movement filter: track position and check if moving
+                    self.movement_filter.update_position(
+                        camera_id, int(tracker_id), bbox, label
+                    )
+                    if not self.movement_filter.should_alert(
+                        camera_id, int(tracker_id), label
+                    ):
+                        self._stats["filtered_stationary"] += 1
+                        try:
+                            l_obj = l_obj.next
+                        except StopIteration:
+                            break
+                        continue
+
+                    # Dedup by tracker_id
+                    dedup_key = f"t:{camera_id}:{tracker_id}"
+                    with self._lock:
+                        last_seen = self._recent_trackers.get(dedup_key)
+                        if last_seen and (now - last_seen) < settings.dedup_window_seconds:
+                            try:
+                                l_obj = l_obj.next
+                            except StopIteration:
+                                break
+                            continue
+                        self._recent_trackers[dedup_key] = now
+
+                    # Upload snapshot
+                    snapshot_url = ""
+                    if frame is not None:
+                        snapshot_url = self.uploader.upload(frame, camera_id, label)
+
+                    # Face analysis for person detections
+                    face_result = FaceResult()
+                    person_id = None
+                    if label == "person" and frame is not None and self.face_analyzer.enabled:
+                        face_key = f"fa:{camera_id}:{tracker_id}"
+                        with self._lock:
+                            self._face_analysis_count.setdefault(face_key, 0)
+                            self._face_analysis_count[face_key] += 1
+                            should_analyze = (
+                                self._face_analysis_count[face_key] %
+                                settings.face_analyze_every_n == 1
+                            )
+                        if should_analyze:
+                            face_result = self.face_analyzer.analyze(frame, bbox, camera_id=camera_id)
+                            if face_result.person_id:
+                                person_id = face_result.person_id
+
+                    # Publish to Redis
+                    payload_data = {
+                        "camera_id": camera_id,
+                        "camera_name": camera_name,
+                        "label": label,
+                        "event_type": event_type,
+                        "confidence": round(confidence, 3),
+                        "bbox": bbox,
+                        "tracker_id": int(tracker_id),
+                        "timestamp": now,
+                    }
                     if face_result.face_detected:
-                        if face_result.person_name:
-                            face_info = f" face={face_result.person_name}"
-                        else:
-                            face_info = " face=unknown"
-                    logger.info(
-                        f"[{camera_name}] {event_type} label={label} "
-                        f"conf={confidence:.2f} tracker={tracker_id}{face_info} id={event_id}"
+                        payload_data["face"] = {
+                            "detected": True,
+                            "confidence": face_result.face_confidence,
+                            "person_id": face_result.person_id,
+                            "person_name": face_result.person_name,
+                            "is_unknown": face_result.is_unknown,
+                            "age": face_result.age,
+                            "gender": face_result.gender,
+                            "emotion": face_result.emotion,
+                        }
+                    try:
+                        self.redis_client.publish(f"detections:{camera_id}", json.dumps(payload_data))
+                        self.redis_client.publish("detections:all", json.dumps(payload_data))
+                    except Exception:
+                        pass
+
+                    # Save event to DB
+                    detected_at = datetime.now(timezone.utc)
+                    event_id = self.db.insert_event(
+                        camera_id=camera_id,
+                        event_type=event_type,
+                        label=label,
+                        confidence=confidence,
+                        bbox=bbox,
+                        tracker_id=int(tracker_id),
+                        snapshot_url=snapshot_url,
+                        detected_at=detected_at,
+                        person_id=person_id,
+                        face_data=face_result if face_result.face_detected else None,
                     )
 
-                try:
-                    l_obj = l_obj.next
-                except StopIteration:
-                    break
+                    if event_id:
+                        self._stats["events"] += 1
+                        face_info = ""
+                        if face_result.face_detected:
+                            if face_result.person_name:
+                                face_info = f" face={face_result.person_name}"
+                            else:
+                                face_info = " face=unknown"
+                        logger.info(
+                            f"[{camera_name}] {event_type} label={label} "
+                            f"conf={confidence:.2f} tracker={tracker_id}{face_info} id={event_id}"
+                        )
 
-            # Clean old dedup entries periodically
-            if self._stats["frames"] % 500 == 0:
-                self._clean_dedup(now)
+                    try:
+                        l_obj = l_obj.next
+                    except StopIteration:
+                        break
+
+                # Clean old dedup entries periodically
+                if self._stats["frames"] % 500 == 0:
+                    self._clean_dedup(now)
+
+            except Exception as e:
+                logger.error(f"Buffer probe frame error: {e}", exc_info=True)
 
             try:
                 l_frame = l_frame.next

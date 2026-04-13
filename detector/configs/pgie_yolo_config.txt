@@ -4,8 +4,9 @@ net-scale-factor=0.0039215697906911373
 model-color-format=0
 
 # YOLO26m ONNX model (exported via DeepStream-Yolo)
+# Note: NvDsInferYoloCudaEngineGet saves engine to /app/ (workdir)
 onnx-file=/opt/models/yolo26m.onnx
-model-engine-file=/opt/models/yolo26m.onnx_b2_gpu0_fp16.engine
+model-engine-file=/app/model_b2_gpu0_fp16.engine
 labelfile-path=/opt/models/labels.txt
 
 # Inference settings
