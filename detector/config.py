@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     force_yolo_fallback: bool = False  # Set FORCE_YOLO_FALLBACK=true to skip DeepStream
     deepstream_startup_timeout: int = 30  # seconds to wait before declaring DS dead
     yolo_model: str = "yolo26m"
-    yolo_imgsz: int = 480  # 480 is optimal for CCTV on T1000 (was 640, too heavy)
+    yolo_imgsz: int = 640
     yolo_half_precision: bool = True  # FP16 — halves VRAM, faster inference on GPU
     confidence_threshold: float = 0.45
     tracker_type: str = "botsort.yaml"
