@@ -58,17 +58,30 @@ class YOLODetector:
 
     def __init__(self):
         self.device = self._select_device()
+        self.use_half = self.device.startswith("cuda") and settings.yolo_half_precision
         logger.info(f"Loading YOLO model: {settings.yolo_model} on device: {self.device}")
 
         self.model = YOLO(settings.yolo_model)
         self.model.to(self.device)
 
+        # Enable FP16 half precision for GPU — uses ~50% less VRAM, faster inference
+        if self.use_half:
+            self.model.model.half()
+            logger.info("FP16 half precision ENABLED — reduced VRAM usage")
+
         # Get class names from the model
         self.class_names = self.model.names  # {0: 'person', 1: 'bicycle', ...}
 
+        # Log GPU memory after model load
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated(0) / (1024 ** 2)
+            reserved = torch.cuda.memory_reserved(0) / (1024 ** 2)
+            logger.info(f"GPU memory — allocated: {allocated:.0f} MB, reserved: {reserved:.0f} MB")
+
         logger.info(
             f"YOLO model loaded — {len(self.class_names)} classes, "
-            f"device={self.device}, imgsz={settings.yolo_imgsz}"
+            f"device={self.device}, imgsz={settings.yolo_imgsz}, "
+            f"half={'ON' if self.use_half else 'OFF'}"
         )
 
     @staticmethod
@@ -106,6 +119,7 @@ class YOLODetector:
                     tracker=settings.tracker_type,
                     persist=True,
                     verbose=False,
+                    half=self.use_half,
                 )
             else:
                 results = self.model(
@@ -114,6 +128,7 @@ class YOLODetector:
                     conf=settings.confidence_threshold,
                     device=self.device,
                     verbose=False,
+                    half=self.use_half,
                 )
         except Exception as e:
             logger.error(f"Inference error: {e}")

@@ -23,6 +23,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import torch
 import psycopg2
 import psycopg2.extras
 import redis
@@ -812,6 +813,14 @@ class YOLOFallbackProcessor:
                         self._recent_trackers = {
                             k: v for k, v in self._recent_trackers.items() if v > cutoff
                         }
+                        # Prune face analysis counters
+                        self._face_analysis_count = {
+                            k: v for k, v in self._face_analysis_count.items()
+                            if v < 100
+                        }
+                        # Periodic GPU memory cleanup to prevent fragmentation
+                        if torch.cuda.is_available() and self._stats["frames"] % 1500 == 0:
+                            torch.cuda.empty_cache()
 
             except Exception as e:
                 logger.error(f"[{self.camera_name}] Error: {e}")
