@@ -26,8 +26,10 @@ class Settings(BaseSettings):
     face_detector_backend: str = "retinaface"
     face_recognition_model: str = "ArcFace"
     face_match_threshold: float = 0.40
-    face_min_size: int = 40
+    face_min_confidence: float = 0.25  # lowered for CCTV (was 0.5, too strict)
+    face_min_size: int = 30  # minimum crop px (lowered for small/distant faces)
     face_analyze_attributes: bool = True
+    face_log_level: str = "DEBUG"  # DEBUG to diagnose, INFO for production
 
     # Service
     service_port: int = 8002

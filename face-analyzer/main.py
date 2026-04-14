@@ -35,10 +35,15 @@ from config import settings
 
 # ── Logging ─────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='{"time":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","msg":"%(message)s"}',
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+# Silence noisy libs
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("PIL").setLevel(logging.WARNING)
+logging.getLogger("tensorflow").setLevel(logging.WARNING)
+logging.getLogger("h5py").setLevel(logging.WARNING)
 logger = logging.getLogger("face-analyzer")
 
 # ── DeepFace (TF on CPU) ────────────────────────────────────
@@ -343,25 +348,37 @@ async def analyze_face(
 
     h, w = frame.shape[:2]
 
-    # If bbox provided, crop to person area with padding
+    # If bbox provided, crop to upper body area (where the face is)
     if bbox_x2 > 0 and bbox_y2 > 0:
         x1 = max(0, int(bbox_x1))
         y1 = max(0, int(bbox_y1))
         x2 = min(w, int(bbox_x2))
         y2 = min(h, int(bbox_y2))
 
-        pad_w = int((x2 - x1) * 0.1)
-        pad_h = int((y2 - y1) * 0.1)
+        person_h = y2 - y1
+        person_w = x2 - x1
+
+        # Focus on upper 50% of person bbox (head + shoulders)
+        y2_face = y1 + int(person_h * 0.5)
+
+        # Add generous padding for face context
+        pad_w = int(person_w * 0.2)
+        pad_h = int(person_h * 0.15)
         x1 = max(0, x1 - pad_w)
         y1 = max(0, y1 - pad_h)
         x2 = min(w, x2 + pad_w)
-        y2 = min(h, y2 + pad_h)
+        y2_face = min(h, y2_face + pad_h)
 
-        crop = frame[y1:y2, x1:x2]
+        crop = frame[y1:y2_face, x1:x2]
+        logger.debug(
+            f"Face crop: person_bbox=({bbox_x1:.0f},{bbox_y1:.0f},{bbox_x2:.0f},{bbox_y2:.0f}) "
+            f"crop_size={crop.shape[1]}x{crop.shape[0]} camera={camera_id}"
+        )
     else:
         crop = frame
 
     if crop.size == 0 or crop.shape[0] < settings.face_min_size or crop.shape[1] < settings.face_min_size:
+        logger.debug(f"Crop too small: {crop.shape if crop.size > 0 else 'empty'}")
         return {"face_detected": False}
 
     # Detect face and extract embedding
@@ -378,13 +395,20 @@ async def analyze_face(
         return {"face_detected": False}
 
     if not representations:
+        logger.debug("DeepFace returned no representations")
         return {"face_detected": False}
 
     face_data = representations[0]
     embedding = np.array(face_data["embedding"])
     face_confidence = face_data.get("face_confidence", 0.0)
 
-    if face_confidence < 0.5:
+    # Lower threshold for CCTV — faces are often small, angled, low-res
+    min_face_confidence = settings.face_min_confidence
+    if face_confidence < min_face_confidence:
+        logger.debug(
+            f"Face confidence too low: {face_confidence:.3f} < {min_face_confidence} "
+            f"(camera={camera_id})"
+        )
         return {"face_detected": False}
 
     _stats["faces_detected"] += 1
