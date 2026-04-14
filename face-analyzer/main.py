@@ -155,6 +155,16 @@ def _refresh_known_persons():
         logger.error(f"Failed to refresh known persons: {e}")
 
 
+def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Calculate cosine distance between two embeddings."""
+    dot = np.dot(a, b)
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 1.0
+    return 1.0 - (dot / (norm_a * norm_b))
+
+
 def _find_match(embedding: np.ndarray) -> Optional[tuple[str, str, float, bool]]:
     """Find closest matching person using cosine distance."""
     with _known_persons_lock:
@@ -166,20 +176,24 @@ def _find_match(embedding: np.ndarray) -> Optional[tuple[str, str, float, bool]]
 
     with _known_persons_lock:
         for person_id, name, known_embedding, is_unknown in _known_persons:
-            dot = np.dot(embedding, known_embedding)
-            norm_a = np.linalg.norm(embedding)
-            norm_b = np.linalg.norm(known_embedding)
-            if norm_a == 0 or norm_b == 0:
-                continue
-            cosine_sim = dot / (norm_a * norm_b)
-            distance = 1.0 - cosine_sim
+            distance = _cosine_distance(embedding, known_embedding)
 
             if distance < best_distance:
                 best_distance = distance
                 best_match = (person_id, name, round(distance, 4), is_unknown)
 
     if best_match and best_distance <= settings.face_match_threshold:
+        logger.debug(
+            f"Match found: {best_match[1]} distance={best_distance:.4f} "
+            f"threshold={settings.face_match_threshold}"
+        )
         return best_match
+
+    if best_match:
+        logger.debug(
+            f"No match — closest: {best_match[1]} distance={best_distance:.4f} "
+            f"> threshold={settings.face_match_threshold}"
+        )
 
     return None
 
@@ -433,6 +447,10 @@ async def analyze_face(
         if match[3]:
             _update_unknown_seen(match[0])
             _stats["faces_unknown"] += 1
+            logger.info(
+                f"Unknown re-seen: {match[1]} (distance={match[2]:.4f}, "
+                f"camera={camera_id})"
+            )
         else:
             _stats["faces_matched"] += 1
             logger.info(f"Face matched: {match[1]} (distance={match[2]:.4f})")
@@ -444,6 +462,8 @@ async def analyze_face(
             result["person_id"] = unknown_id
             result["person_name"] = "Desconocido"
             result["is_unknown"] = True
+        else:
+            logger.debug("Unknown face dedup — skipped registration")
 
     # Optionally analyze attributes
     if settings.face_analyze_attributes:

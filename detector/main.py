@@ -777,14 +777,15 @@ class YOLOFallbackProcessor:
 
                         snapshot_url = self.uploader.upload(frame, self.camera_id, det.label)
 
-                        # Face analysis for person detections
+                        # Face analysis for person detections (once per tracker)
                         face_result = FaceResult()
                         person_id = None
                         if det.label == "person" and self.face_analyzer.enabled:
                             face_key = f"fa:{self.camera_id}:{tid}"
-                            self._face_analysis_count.setdefault(face_key, 0)
-                            self._face_analysis_count[face_key] += 1
-                            if self._face_analysis_count[face_key] % settings.face_analyze_every_n == 1:
+                            prev_count = self._face_analysis_count.get(face_key, 0)
+                            self._face_analysis_count[face_key] = prev_count + 1
+                            # Only analyze on first encounter of this tracker
+                            if prev_count == 0:
                                 face_result = self.face_analyzer.analyze(frame, det.bbox, camera_id=self.camera_id)
                                 if face_result.person_id:
                                     person_id = face_result.person_id

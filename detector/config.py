@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     face_match_threshold: float = 0.40  # cosine distance (lower = stricter)
     face_min_size: int = 40  # minimum crop size in pixels
     face_analyze_attributes: bool = True  # age, gender, emotion
-    face_analyze_every_n: int = 5  # analyze face every N detections per tracker
+    face_analyze_every_n: int = 1  # analyze face on first detection per tracker
 
     # Processing
     process_every_n_frames: int = 5  # analyze every 5th frame (was 3, reduced GPU load)
