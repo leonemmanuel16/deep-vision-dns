@@ -44,6 +44,9 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("tensorflow").setLevel(logging.WARNING)
 logging.getLogger("h5py").setLevel(logging.WARNING)
+logging.getLogger("python_multipart").setLevel(logging.WARNING)
+logging.getLogger("python_multipart.multipart").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = logging.getLogger("face-analyzer")
 
 # ── DeepFace (TF on CPU) ────────────────────────────────────

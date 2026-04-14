@@ -2,6 +2,7 @@ FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV TF_USE_LEGACY_KERAS=1
 # Force TensorFlow to CPU — no GPU needed for face analysis
 ENV CUDA_VISIBLE_DEVICES=""
 
