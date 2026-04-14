@@ -18,6 +18,8 @@ import {
   Link,
   Eye,
   Clock,
+  Maximize2,
+  ZoomIn,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -51,6 +53,142 @@ interface PersonStats {
 
 type TabType = "known" | "unknown";
 
+/* ═══════════════════════════════════════════════════════════════ */
+/* Authenticated Photo Component                                   */
+/* ═══════════════════════════════════════════════════════════════ */
+
+function AuthPhoto({
+  photoUrl,
+  alt,
+  className,
+  onClick,
+}: {
+  photoUrl: string;
+  alt: string;
+  className?: string;
+  onClick?: () => void;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    api
+      .fetchSnapshot(photoUrl)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setSrc(url);
+      })
+      .catch(() => setError(true));
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [photoUrl]);
+
+  if (error || !src) {
+    return <User className="w-7 h-7 text-text-muted" />;
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onClick={onClick}
+      style={onClick ? { cursor: "pointer" } : undefined}
+    />
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* Photo Lightbox Modal                                            */
+/* ═══════════════════════════════════════════════════════════════ */
+
+function PhotoLightbox({
+  photoUrl,
+  personName,
+  onClose,
+}: {
+  photoUrl: string;
+  personName: string;
+  onClose: () => void;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    api
+      .fetchSnapshot(photoUrl)
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setSrc(url);
+      })
+      .catch(() => {});
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [photoUrl]);
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/90 flex items-center justify-center z-[60] p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-w-3xl max-h-[90vh] w-full"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Close button */}
+        <button
+          onClick={onClose}
+          className="absolute -top-10 right-0 p-2 text-white/60 hover:text-white transition-colors"
+        >
+          <X className="w-6 h-6" />
+        </button>
+
+        {/* Person name */}
+        <div className="absolute -top-10 left-0 text-white font-medium">
+          {personName}
+        </div>
+
+        {/* Image */}
+        <div className="bg-surface rounded-xl overflow-hidden">
+          {src ? (
+            <img
+              src={src}
+              alt={personName}
+              className="w-full h-auto max-h-[80vh] object-contain"
+            />
+          ) : (
+            <div className="flex items-center justify-center h-64">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+            </div>
+          )}
+        </div>
+
+        {/* Hint */}
+        <p className="text-center text-white/40 text-xs mt-3">
+          Click fuera o ESC para cerrar
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* Main Page                                                       */
+/* ═══════════════════════════════════════════════════════════════ */
+
 export default function DatabasePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<TabType>("known");
@@ -61,6 +199,7 @@ export default function DatabasePage() {
   const [identifyPerson, setIdentifyPerson] = useState<Person | null>(null);
   const [mergePerson, setMergePerson] = useState<Person | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [lightboxPerson, setLightboxPerson] = useState<Person | null>(null);
   const [error, setError] = useState("");
 
   const loadData = useCallback(async () => {
@@ -249,6 +388,7 @@ export default function DatabasePage() {
               onDelete={() => setDeleteConfirm(person.id)}
               onIdentify={() => setIdentifyPerson(person)}
               onMerge={() => setMergePerson(person)}
+              onPhotoClick={() => setLightboxPerson(person)}
               deleteConfirm={deleteConfirm === person.id}
               onCancelDelete={() => setDeleteConfirm(null)}
               onConfirmDelete={() => handleDelete(person.id)}
@@ -289,13 +429,22 @@ export default function DatabasePage() {
           }}
         />
       )}
+
+      {/* Photo Lightbox */}
+      {lightboxPerson && lightboxPerson.photo_url && (
+        <PhotoLightbox
+          photoUrl={lightboxPerson.photo_url}
+          personName={lightboxPerson.name}
+          onClose={() => setLightboxPerson(null)}
+        />
+      )}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Person Card Component
-// ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════ */
+/* Person Card Component                                           */
+/* ═══════════════════════════════════════════════════════════════ */
 
 function PersonCard({
   person,
@@ -303,6 +452,7 @@ function PersonCard({
   onDelete,
   onIdentify,
   onMerge,
+  onPhotoClick,
   deleteConfirm,
   onCancelDelete,
   onConfirmDelete,
@@ -312,28 +462,36 @@ function PersonCard({
   onDelete: () => void;
   onIdentify: () => void;
   onMerge: () => void;
+  onPhotoClick: () => void;
   deleteConfirm: boolean;
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
 }) {
-  const photoSrc = person.photo_url
-    ? `${process.env.NEXT_PUBLIC_API_URL}/api/snapshots/${person.photo_url}`
-    : null;
-
   return (
     <div className="bg-surface border border-border rounded-xl p-4 hover:border-border-hover transition-colors relative group">
       <div className="flex items-start gap-3">
-        <div className="w-14 h-14 rounded-full bg-background flex items-center justify-center overflow-hidden flex-shrink-0 border-2 border-border">
-          {photoSrc ? (
-            <img
-              src={photoSrc}
-              alt={person.name}
-              className="w-full h-full object-cover"
-            />
+        {/* Photo - clickable */}
+        <div
+          className="w-14 h-14 rounded-full bg-background flex items-center justify-center overflow-hidden flex-shrink-0 border-2 border-border relative cursor-pointer group/photo"
+          onClick={person.photo_url ? onPhotoClick : undefined}
+        >
+          {person.photo_url ? (
+            <>
+              <AuthPhoto
+                photoUrl={person.photo_url}
+                alt={person.name}
+                className="w-full h-full object-cover"
+              />
+              {/* Zoom icon on hover */}
+              <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover/photo:opacity-100 transition-opacity rounded-full">
+                <ZoomIn className="w-4 h-4 text-white" />
+              </div>
+            </>
           ) : (
             <User className="w-7 h-7 text-text-muted" />
           )}
         </div>
+
         <div className="flex-1 min-w-0">
           <h3 className="text-sm font-semibold text-text-primary truncate">
             {person.name}
@@ -438,9 +596,9 @@ function PersonCard({
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Add Person Modal
-// ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════ */
+/* Add Person Modal                                                */
+/* ═══════════════════════════════════════════════════════════════ */
 
 function AddPersonModal({
   onClose,
@@ -615,9 +773,9 @@ function AddPersonModal({
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Identify Unknown Modal
-// ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════ */
+/* Identify Unknown Modal                                          */
+/* ═══════════════════════════════════════════════════════════════ */
 
 function IdentifyModal({
   person,
@@ -634,10 +792,6 @@ function IdentifyModal({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-
-  const photoSrc = person.photo_url
-    ? `${process.env.NEXT_PUBLIC_API_URL}/api/snapshots/${person.photo_url}`
-    : null;
 
   const handleSubmit = async () => {
     if (!name.trim()) {
@@ -682,8 +836,12 @@ function IdentifyModal({
         {/* Show the unknown person's face */}
         <div className="flex items-center gap-4 p-3 bg-background rounded-lg border border-border">
           <div className="w-16 h-16 rounded-full bg-surface flex items-center justify-center overflow-hidden border-2 border-orange-500/30">
-            {photoSrc ? (
-              <img src={photoSrc} alt="Desconocido" className="w-full h-full object-cover" />
+            {person.photo_url ? (
+              <AuthPhoto
+                photoUrl={person.photo_url}
+                alt="Desconocido"
+                className="w-full h-full object-cover"
+              />
             ) : (
               <UserX className="w-8 h-8 text-orange-400" />
             )}
@@ -758,9 +916,9 @@ function IdentifyModal({
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Merge Modal — link unknown to existing person
-// ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════ */
+/* Merge Modal — link unknown to existing person                   */
+/* ═══════════════════════════════════════════════════════════════ */
 
 function MergeModal({
   person,
@@ -808,10 +966,6 @@ function MergeModal({
     }
   };
 
-  const photoSrc = person.photo_url
-    ? `${process.env.NEXT_PUBLIC_API_URL}/api/snapshots/${person.photo_url}`
-    : null;
-
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div className="bg-surface border border-border rounded-2xl w-full max-w-lg p-6 space-y-5 max-h-[90vh] overflow-y-auto">
@@ -833,8 +987,12 @@ function MergeModal({
         {/* Source unknown person */}
         <div className="flex items-center gap-4 p-3 bg-orange-500/5 rounded-lg border border-orange-500/20">
           <div className="w-14 h-14 rounded-full bg-surface flex items-center justify-center overflow-hidden border-2 border-orange-500/30 flex-shrink-0">
-            {photoSrc ? (
-              <img src={photoSrc} alt="Desconocido" className="w-full h-full object-cover" />
+            {person.photo_url ? (
+              <AuthPhoto
+                photoUrl={person.photo_url}
+                alt="Desconocido"
+                className="w-full h-full object-cover"
+              />
             ) : (
               <UserX className="w-7 h-7 text-orange-400" />
             )}
@@ -877,9 +1035,6 @@ function MergeModal({
             </p>
           ) : (
             knownPersons.map((kp) => {
-              const kpPhoto = kp.photo_url
-                ? `${process.env.NEXT_PUBLIC_API_URL}/api/snapshots/${kp.photo_url}`
-                : null;
               const isSelected = selectedTarget?.id === kp.id;
               return (
                 <button
@@ -892,8 +1047,12 @@ function MergeModal({
                   }`}
                 >
                   <div className="w-10 h-10 rounded-full bg-surface flex items-center justify-center overflow-hidden flex-shrink-0">
-                    {kpPhoto ? (
-                      <img src={kpPhoto} alt={kp.name} className="w-full h-full object-cover" />
+                    {kp.photo_url ? (
+                      <AuthPhoto
+                        photoUrl={kp.photo_url}
+                        alt={kp.name}
+                        className="w-full h-full object-cover"
+                      />
                     ) : (
                       <User className="w-5 h-5 text-text-muted" />
                     )}
