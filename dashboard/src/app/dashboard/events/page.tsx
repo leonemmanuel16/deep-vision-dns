@@ -4,7 +4,16 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
-import { Bell, Filter, Search, Image, ChevronRight } from "lucide-react";
+import {
+  Bell,
+  Filter,
+  Search,
+  Image,
+  ChevronRight,
+  User,
+  UserX,
+  UserCheck,
+} from "lucide-react";
 
 function SnapshotThumbnail({ snapshotUrl }: { snapshotUrl: string }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -40,6 +49,82 @@ function SnapshotThumbnail({ snapshotUrl }: { snapshotUrl: string }) {
     />
   );
 }
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* Person badge for events                                         */
+/* ═══════════════════════════════════════════════════════════════ */
+
+function PersonBadge({ event }: { event: any }) {
+  const attrs = event.attributes || {};
+  const faceName = attrs.face_match;
+  const isUnknown = !faceName && attrs.face_detected;
+  const hasPerson = event.person_id;
+
+  // Known person matched
+  if (faceName && !faceName.startsWith("Desconocido")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-green-500/10 text-green-400 font-medium">
+        <UserCheck className="w-3 h-3" />
+        {faceName}
+      </span>
+    );
+  }
+
+  // Unknown person (Desconocido #N)
+  if (faceName && faceName.startsWith("Desconocido")) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-orange-500/10 text-orange-400 font-medium">
+        <UserX className="w-3 h-3" />
+        {faceName}
+      </span>
+    );
+  }
+
+  // Face detected but no match info in attributes — check person_id
+  if (hasPerson) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-blue-500/10 text-blue-400">
+        <User className="w-3 h-3" />
+        Identificado
+      </span>
+    );
+  }
+
+  // Person detection but no face analysis
+  if (event.label === "person") {
+    return (
+      <span className="text-xs text-text-muted">
+        Sin rostro
+      </span>
+    );
+  }
+
+  // Not a person
+  return <span className="text-xs text-text-muted">—</span>;
+}
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* Label names in Spanish                                          */
+/* ═══════════════════════════════════════════════════════════════ */
+
+const LABEL_NAMES: Record<string, string> = {
+  person: "Persona",
+  car: "Auto",
+  truck: "Camion",
+  bus: "Autobus",
+  motorcycle: "Moto",
+  bicycle: "Bicicleta",
+  cat: "Gato",
+  dog: "Perro",
+};
+
+const EVENT_TYPE_NAMES: Record<string, string> = {
+  person_detected: "Persona detectada",
+  vehicle_detected: "Vehiculo detectado",
+  bicycle_detected: "Bicicleta detectada",
+  animal_detected: "Animal detectado",
+  object_detected: "Objeto detectado",
+};
 
 export default function EventsPage() {
   const [events, setEvents] = useState<any[]>([]);
@@ -147,10 +232,10 @@ export default function EventsPage() {
                   Evento
                 </th>
                 <th className="text-left text-xs text-text-muted font-medium px-4 py-3">
-                  Confianza
+                  Persona
                 </th>
                 <th className="text-left text-xs text-text-muted font-medium px-4 py-3">
-                  Review
+                  Confianza
                 </th>
                 <th className="text-left text-xs text-text-muted font-medium px-4 py-3">
                   Fecha
@@ -179,11 +264,14 @@ export default function EventsPage() {
                         labelColors[event.label] || "bg-muted/10 text-muted"
                       }`}
                     >
-                      {event.label}
+                      {LABEL_NAMES[event.label] || event.label}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm text-text-secondary">
-                    {event.event_type}
+                    {EVENT_TYPE_NAMES[event.event_type] || event.event_type}
+                  </td>
+                  <td className="px-4 py-3">
+                    <PersonBadge event={event} />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
@@ -199,19 +287,6 @@ export default function EventsPage() {
                         {Math.round(event.confidence * 100)}%
                       </span>
                     </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded ${
-                        event.review_pass === "both"
-                          ? "bg-success/10 text-success"
-                          : event.review_pass === "nightly"
-                          ? "bg-accent/10 text-accent"
-                          : "bg-muted/10 text-muted"
-                      }`}
-                    >
-                      {event.review_pass}
-                    </span>
                   </td>
                   <td className="px-4 py-3 text-xs text-text-muted">
                     {formatDate(event.detected_at)}

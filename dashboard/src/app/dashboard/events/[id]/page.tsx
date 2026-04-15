@@ -93,6 +93,7 @@ function SnapshotWithOverlay({
   confidence,
   eventType,
   trackerId,
+  personName,
 }: {
   snapshotUrl: string;
   bbox?: { x1: number; y1: number; x2: number; y2: number };
@@ -100,6 +101,7 @@ function SnapshotWithOverlay({
   confidence: number;
   eventType: string;
   trackerId?: number;
+  personName?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -282,11 +284,11 @@ function SnapshotWithOverlay({
                   className="flex items-center gap-1.5 px-2 py-1 rounded-t-md text-white text-xs font-semibold whitespace-nowrap"
                   style={{ backgroundColor: bboxColor }}
                 >
-                  <span>{LABEL_NAMES[label] || label}</span>
+                  <span>{personName || LABEL_NAMES[label] || label}</span>
                   <span className="opacity-80">
                     {Math.round(confidence * 100)}%
                   </span>
-                  {trackerId && (
+                  {trackerId && !personName && (
                     <span className="opacity-60">#{trackerId}</span>
                   )}
                 </div>
@@ -465,6 +467,7 @@ export default function EventDetailPage() {
               confidence={event.confidence}
               eventType={event.event_type}
               trackerId={event.tracker_id}
+              personName={attrs.face_match || undefined}
             />
           ) : (
             <div className="aspect-video bg-background flex items-center justify-center">
@@ -518,6 +521,82 @@ export default function EventDetailPage() {
               )}
             </div>
           </div>
+
+          {/* Person Identification */}
+          {event.label === "person" && (
+            <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
+              <h2 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                {attrs.face_match && !attrs.face_match.startsWith("Desconocido") ? (
+                  <>
+                    <span className="w-4 h-4 text-green-400">👤</span>
+                    Persona identificada
+                  </>
+                ) : attrs.face_match ? (
+                  <>
+                    <span className="w-4 h-4 text-orange-400">❓</span>
+                    Persona desconocida
+                  </>
+                ) : (
+                  <>
+                    <span className="w-4 h-4 text-text-muted">👤</span>
+                    Identificacion facial
+                  </>
+                )}
+              </h2>
+
+              <div className="space-y-3">
+                {attrs.face_match ? (
+                  <>
+                    <DetailRow
+                      label="Nombre"
+                      value={attrs.face_match}
+                      highlight
+                      color={attrs.face_match.startsWith("Desconocido") ? "#f97316" : "#22c55e"}
+                    />
+                    {attrs.match_distance !== undefined && (
+                      <DetailRow
+                        label="Distancia"
+                        value={`${attrs.match_distance.toFixed(4)}`}
+                      />
+                    )}
+                  </>
+                ) : attrs.face_detected ? (
+                  <DetailRow
+                    label="Rostro"
+                    value="Detectado — No coincide"
+                    highlight
+                    color="#f59e0b"
+                  />
+                ) : (
+                  <DetailRow
+                    label="Rostro"
+                    value="No detectado"
+                  />
+                )}
+
+                {attrs.edad_estimada && (
+                  <DetailRow label="Edad estimada" value={attrs.edad_estimada} />
+                )}
+                {attrs.genero_estimado && (
+                  <DetailRow label="Genero estimado" value={attrs.genero_estimado} />
+                )}
+                {attrs.emocion && (
+                  <DetailRow label="Emocion" value={attrs.emocion} />
+                )}
+
+                {event.person_id && (
+                  <div className="pt-2 border-t border-border">
+                    <a
+                      href={`/dashboard/database`}
+                      className="text-xs text-primary hover:text-primary-hover transition-colors"
+                    >
+                      Ver en base de datos →
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* When & Where */}
           <div className="bg-surface border border-border rounded-xl p-5 space-y-4">
